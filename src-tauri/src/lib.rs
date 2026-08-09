@@ -122,54 +122,72 @@ async fn ping_host(host: String) -> Result<u64, String> {
     Ok(ms)
 }
 
-/// 最小化 ping 测试命令：返回 "host => size bytes, time=xx.xxms" 格式
+/// 最小化 ping 测试命令：返回 "host (ip) => size bytes, time=xx.xxms" 格式
+/// 用于快速验证网络连通性 + surge-ping 是否正常工作
 #[tauri::command]
 async fn ping_test(host: String) -> Result<String, String> {
     let host = host.trim().to_string();
+    log::info!("ping_test: 解析 {}", host);
     let ip = resolve_host(&host).await?;
+    log::info!("ping_test: 解析到 {:?}", ip);
     let (ms, size) = ping_impl(ip).await?;
     Ok(format!(
-        "{} => {} bytes, time={:.2}ms",
-        host,
-        size,
-        ms as f64
+        "{} ({}) => {} bytes, time={:.2}ms",
+        host, ip, size, ms as f64
     ))
 }
 
-/// 主机名 → IP（IP 直用，域名走 tokio 异步 DNS）
+/// 主机名/IP → IpAddr（优先 IPv4：避免 Windows ICMPv6 被防火墙拦截）
 async fn resolve_host(host: &str) -> Result<std::net::IpAddr, String> {
     use std::net::IpAddr;
     let host = host.trim();
     if host.is_empty() {
         return Err("主机地址为空".to_string());
     }
-    match host.parse::<IpAddr>() {
-        Ok(ip) => Ok(ip),
-        Err(_) => tokio::net::lookup_host((host, 0))
-            .await
-            .map_err(|e| format!("DNS 解析失败: {}", e))?
-            .next()
-            .map(|addr| addr.ip())
-            .ok_or_else(|| "DNS 无解析结果".to_string()),
+    // IP 字面量直接使用
+    if let Ok(ip) = host.parse::<IpAddr>() {
+        return Ok(ip);
     }
+    // 域名解析：收集全部地址，优先 IPv4，兜底 IPv6
+    let addrs = tokio::net::lookup_host((host, 0))
+        .await
+        .map_err(|e| format!("DNS 解析失败: {}", e))?;
+    let mut ipv4: Option<IpAddr> = None;
+    let mut ipv6: Option<IpAddr> = None;
+    for addr in addrs {
+        match addr.ip() {
+            IpAddr::V4(v4) => {
+                if ipv4.is_none() {
+                    ipv4 = Some(IpAddr::V4(v4));
+                }
+            }
+            IpAddr::V6(v6) => {
+                if ipv6.is_none() {
+                    ipv6 = Some(IpAddr::V6(v6));
+                }
+            }
+        }
+    }
+    ipv4.or(ipv6).ok_or_else(|| "DNS 无解析结果".to_string())
 }
 
 /// 核心 ping 实现（可单测）：返回 (毫秒, 发送字节数)
 async fn ping_impl(ip: std::net::IpAddr) -> Result<(u64, usize), String> {
     let client = surge_ping::Client::new(&surge_ping::Config::default())
-        .map_err(|e| format!("ping 初始化失败: {}", e))?;
+        .map_err(|e| format!("ping 初始化失败: {:?}", e))?;
     let mut pinger = client
         .pinger(ip, surge_ping::PingIdentifier(0x1234))
         .await;
-    // 内置超时 2s（>= 排查清单建议值）
+    // 内置超时 2s
     pinger.timeout(std::time::Duration::from_secs(2));
-    let payload = [0u8; 16];
+    // 32 字节 payload（过小包可能被部分网络设备丢弃）
+    let payload = [0u8; 32];
     let size = payload.len();
 
     match pinger.ping(surge_ping::PingSequence(0), &payload).await {
         Ok((_packet, rtt)) => Ok((rtt.as_millis() as u64, size)),
         Err(surge_ping::SurgeError::Timeout { .. }) => Err("ping 超时".to_string()),
-        Err(e) => Err(format!("ping 失败: {}", e)),
+        Err(e) => Err(format!("ping 失败: {:?}", e)),
     }
 }
 
