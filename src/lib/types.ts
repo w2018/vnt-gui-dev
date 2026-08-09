@@ -73,6 +73,12 @@ export interface DeviceListResult {
   local: PeerInfo | null;
 }
 
+/** 本机增强信息（--info 解析） */
+export interface LocalInfo {
+  nat_type: string | null;
+  relay_server: string | null;
+}
+
 /** 应用行为设置（托盘可见性等） */
 export interface AppSettings {
   hide_tray_on_autostart: boolean;

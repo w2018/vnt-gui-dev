@@ -122,6 +122,8 @@ pub struct AppState {
     pub virtual_ip: Mutex<Option<String>>,
     /// 日志提取的实际连接服务器 host（如 "8.134.66.150"，用于未配置地址时 ping）
     pub server_host: Mutex<Option<String>>,
+    /// 本机 NAT 类型（--info 解析，如 "Cone"）
+    pub nat_type: Mutex<Option<String>>,
     /// sidecar 启停互斥锁（防止 autostart 自动连接与手动连接并发导致双进程）
     pub process_lock: Mutex<()>,
     /// 日志环形缓冲区（最多 2000 行）
@@ -151,6 +153,7 @@ impl AppState {
             active_config_id: RwLock::new(None),
             virtual_ip: Mutex::new(None),
             server_host: Mutex::new(None),
+            nat_type: Mutex::new(None),
             process_lock: Mutex::new(()),
             log_buffer: crate::logger::LogBuffer::new(),
             traffic_snapshot: RwLock::new(TrafficSnapshot::default()),

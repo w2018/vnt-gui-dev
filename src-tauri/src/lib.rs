@@ -232,6 +232,8 @@ async fn ping_impl(ip: std::net::IpAddr) -> Result<(u64, usize), String> {
 mod ping_tests {
     use super::parse_info;
     use super::parse_list_line;
+    use super::parse_nat_type;
+    use super::parse_relay_server;
     use super::ping_impl;
 
     #[test]
@@ -267,6 +269,15 @@ mod ping_tests {
         // 失败输出（无后台）不产生脏数据
         let (n, i) = parse_info("Os { code: 10054, kind: ConnectionReset }");
         assert!(n.is_none() && i.is_none());
+    }
+
+    #[test]
+    fn info_extras_parse() {
+        let text = "Name: Z\nVirtual ip: 10.26.0.3\nNAT type: Cone\nRelay server: 8.134.66.150:29872";
+        assert_eq!(parse_relay_server(text).as_deref(), Some("8.134.66.150"));
+        assert_eq!(parse_nat_type(text).as_deref(), Some("Cone"));
+        assert_eq!(parse_relay_server("no relay here"), None);
+        assert_eq!(parse_nat_type("NAT type:"), None);
     }
 
     #[tokio::test]
@@ -437,6 +448,16 @@ async fn get_device_list(app: tauri::AppHandle) -> Result<state::DeviceListResul
         let (n, i) = parse_info(text);
         local_name = n;
         local_ip = i;
+        // 真实连接服务器（Relay server: 8.134.66.150:29872）→ 未配置地址时 ping 目标
+        if let Some(host) = parse_relay_server(text) {
+            let state: tauri::State<'_, AppState> = app.state();
+            *state.server_host.lock() = Some(host);
+        }
+        // NAT 类型（NAT type: Cone）
+        if let Some(nat) = parse_nat_type(text) {
+            let state: tauri::State<'_, AppState> = app.state();
+            *state.nat_type.lock() = Some(nat);
+        }
     }
     // 降级：register 日志解析的本机 IP + 配置设备名/主机名
     if local_name.is_none() {
@@ -522,6 +543,54 @@ fn parse_info(text: &str) -> (Option<String>, Option<String>) {
         }
     }
     (name, ip)
+}
+
+/// 解析 --info 的 Relay server 行（"Relay server: 8.134.66.150:29872"）→ 纯 host
+fn parse_relay_server(text: &str) -> Option<String> {
+    for line in text.lines() {
+        let line = line.trim();
+        if line.to_lowercase().starts_with("relay server:") {
+            let addr = line["relay server:".len()..].trim();
+            return extract_host(addr);
+        }
+    }
+    None
+}
+
+/// 解析 --info 的 NAT 类型行（"NAT type: Cone"）
+fn parse_nat_type(text: &str) -> Option<String> {
+    for line in text.lines() {
+        let line = line.trim();
+        if line.to_lowercase().starts_with("nat type:") {
+            let nat = line["nat type:".len()..].trim();
+            if !nat.is_empty() {
+                return Some(nat.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// 本机增强信息（连接信息展示用）：NAT 类型 + 真实连接服务器
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct LocalInfo {
+    pub nat_type: Option<String>,
+    pub relay_server: Option<String>,
+}
+
+/// 获取本机 NAT 类型与真实连接服务器（来自 --info 解析，连接后有效）
+#[tauri::command]
+fn get_local_info(app: tauri::AppHandle) -> LocalInfo {
+    let state: State<'_, AppState> = app.state();
+    let nat_guard = state.nat_type.lock();
+    let nat_type = nat_guard.clone();
+    drop(nat_guard);
+    let host_guard = state.server_host.lock();
+    let relay_server = host_guard.clone();
+    LocalInfo {
+        nat_type,
+        relay_server,
+    }
 }
 
 /// 解析 vnt-cli --list 单行输出（真实格式，列空格对齐，设备名可含空格）：
@@ -711,6 +780,7 @@ pub fn run() {
             ping_host,
             ping_test,
             get_ping_host,
+            get_local_info,
             get_logs,
             clear_logs,
             export_logs,

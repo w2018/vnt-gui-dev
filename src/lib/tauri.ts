@@ -10,6 +10,7 @@ import type {
   ConfigStore,
   ConnectionStatus,
   DeviceListResult,
+  LocalInfo,
   LogEntry,
   TrafficSnapshot,
   UpdateInfo,
@@ -43,6 +44,7 @@ export const api = {
   pingHost: (host: string) => invoke<number>('ping_host', { host }),
   pingTest: (host: string) => invoke<string>('ping_test', { host }),
   getPingHost: () => invoke<string | null>('get_ping_host'),
+  getLocalInfo: () => invoke<LocalInfo>('get_local_info'),
 };
 
 /** 初始化 Rust → 前端事件监听，返回取消函数列表 */

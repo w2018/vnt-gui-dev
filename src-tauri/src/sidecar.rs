@@ -198,9 +198,14 @@ fn stop_vnt_locked(app: &AppHandle) {
 /// 注意：tauri externalBin 部署时会去掉 target triple 后缀，进程名是 "vnt-cli.exe"
 fn kill_residual_vnt_cli() {
     let exe = "vnt-cli.exe";
-    let output = std::process::Command::new("taskkill")
-        .args(["/F", "/IM", exe])
-        .output();
+    let mut cmd = std::process::Command::new("taskkill");
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        // CREATE_NO_WINDOW：禁止弹出控制台黑框
+        cmd.creation_flags(0x08000000);
+    }
+    let output = cmd.args(["/F", "/IM", exe]).output();
     match output {
         Ok(o) => {
             if o.status.success() {

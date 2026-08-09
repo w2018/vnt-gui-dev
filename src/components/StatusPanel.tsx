@@ -5,6 +5,7 @@ import { Button, Card, Descriptions, Space, Tag, Tooltip, Typography, message } 
 import { api } from '../lib/tauri';
 import { PING_INTERVAL } from '../lib/constants';
 import { latencyColor } from '../lib/latency';
+import type { LocalInfo } from '../lib/types';
 import { useConnectionStore } from '../stores/connectionStore';
 import { useConfigStore } from '../stores/configStore';
 import { useDeviceStore } from '../stores/deviceStore';
@@ -29,11 +30,32 @@ export function StatusPanel() {
   // 延时检测状态：latency=null 且 pingFail=true → 真实超时；pingError 记录失败详情（tooltip 展示）
   const [pingFail, setPingFail] = useState(false);
   const [pingError, setPingError] = useState<string | null>(null);
+  // 本机增强信息（NAT 类型 / 真实服务器，来自 --info 解析）
+  const [localInfo, setLocalInfo] = useState<LocalInfo | null>(null);
 
   const active = configs.find((c) => c.id === activeConfigId);
   const localPeer = useDeviceStore((s) => s.localPeer);
   const running = status === 'connected' || status === 'starting' || status === 'reconnecting';
   const st = statusMap[status] ?? statusMap.stopped;
+
+  // 本机信息轮询（NAT 类型/真实服务器，每 5 秒，与延时检测同节奏）
+  useEffect(() => {
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const info = await api.getLocalInfo();
+        if (!cancelled) setLocalInfo(info);
+      } catch {
+        /* 未连接时忽略 */
+      }
+    };
+    void tick();
+    const timer = window.setInterval(tick, PING_INTERVAL);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, []);
 
   // 延时 = ping 服务器（每 5 秒）：ping 目标 = 配置地址或日志提取的实际服务器；组件卸载时清除定时器
   useEffect(() => {
@@ -111,8 +133,9 @@ export function StatusPanel() {
           </Descriptions.Item>
           <Descriptions.Item label="虚拟 IP">{virtualIp ?? '未分配'}</Descriptions.Item>
           <Descriptions.Item label="服务器">
-            {serverAddress ?? active?.server_address ?? '默认官方服务器'}
+            {localInfo?.relay_server ?? serverAddress ?? active?.server_address ?? '默认官方服务器'}
           </Descriptions.Item>
+          <Descriptions.Item label="NAT 类型">{localInfo?.nat_type ?? '-'}</Descriptions.Item>
           <Descriptions.Item label="组网编号">
             {active?.token ? maskToken(active.token) : '-'}
           </Descriptions.Item>
