@@ -6,6 +6,7 @@
   "permissions": [
     "core:default",
     "shell:allow-execute",
+    "shell:allow-open",
     "shell:allow-spawn",
     "shell:allow-kill",
     "autostart:allow-enable",

@@ -1,23 +1,42 @@
-// 设备列表（文档 §4.2.6）：连接时每 5 秒轮询
+// 设备列表（文档 §4.2.6）：每 5 秒刷新列表 + 逐一 ping 每台设备（错峰，避免洪泛）
 
-import { useEffect, useRef } from 'react';
+import { useEffect } from 'react';
 import { Button, Card, Empty, Space, Table, Tag, Typography, message } from 'antd';
 import { Copy, RefreshCw } from 'lucide-react';
 import type { ColumnsType } from 'antd/es/table';
 import { useDeviceStore } from '../stores/deviceStore';
+import { api } from '../lib/tauri';
+import { PING_INTERVAL } from '../lib/constants';
 import type { PeerInfo } from '../lib/types';
 
 export function DeviceList() {
   const { devices, refresh } = useDeviceStore();
-  const timerRef = useRef<number | null>(null);
 
+  // 每 5 秒：刷新设备列表 + 顺序逐一 ping（错峰）；组件卸载时清除定时器
   useEffect(() => {
-    void refresh();
-    timerRef.current = window.setInterval(() => {
-      void refresh();
-    }, 5000);
+    let cancelled = false;
+    const tick = async () => {
+      await refresh();
+      const list = useDeviceStore.getState().devices;
+      for (const dev of list) {
+        if (cancelled) return;
+        let ms: number;
+        try {
+          ms = await api.pingHost(dev.virtual_ip);
+        } catch {
+          // 离线/超时：标记 -1，不中断后续设备检测
+          useDeviceStore.getState().updateLatency(dev.virtual_ip, -1);
+          continue;
+        }
+        if (cancelled) return;
+        useDeviceStore.getState().updateLatency(dev.virtual_ip, ms);
+      }
+    };
+    void tick();
+    const timer = window.setInterval(tick, PING_INTERVAL);
     return () => {
-      if (timerRef.current) window.clearInterval(timerRef.current);
+      cancelled = true;
+      window.clearInterval(timer);
     };
   }, [refresh]);
 
@@ -46,10 +65,10 @@ export function DeviceList() {
         t === 'p2p' ? <Tag color="green">P2P 直连</Tag> : <Tag color="orange">中继</Tag>,
     },
     {
-      title: '延迟',
+      title: '延时',
       dataIndex: 'latency',
       key: 'latency',
-      render: (ms: number) => (ms > 0 ? `${ms}ms` : '-'),
+      render: (ms: number) => (ms > 0 ? `${ms}ms` : ms === 0 ? '--' : '超时'),
     },
     {
       title: '状态',

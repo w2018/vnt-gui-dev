@@ -111,6 +111,71 @@ fn import_configs(path: String) -> Result<Vec<VntConfig>, String> {
     Ok(store.configs)
 }
 
+// ==================== 网络检测 ====================
+
+/// Ping 主机（Windows: ping.exe 子进程，解析延迟毫秒；失败/超时返回 Err）
+#[tauri::command]
+fn ping_host(host: String) -> Result<u64, String> {
+    let host = host.trim();
+    if host.is_empty() {
+        return Err("主机地址为空".to_string());
+    }
+    #[cfg(windows)]
+    {
+        let output = std::process::Command::new("ping")
+            .args(["-n", "1", "-w", "1500", host])
+            .output()
+            .map_err(|e| format!("ping 执行失败: {}", e))?;
+        if !output.status.success() {
+            return Err("ping 失败（主机不可达）".to_string());
+        }
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        for line in stdout.lines() {
+            // 兼容中英文输出："时间=12ms" / "time=12ms" / "时间<1ms" / "time<1ms"
+            let lower = line.to_lowercase();
+            if lower.contains("time=") || lower.contains("time<") {
+                if let Some(ms) = parse_ping_ms(&lower) {
+                    return Ok(ms);
+                }
+            }
+        }
+        Err("无法解析 ping 结果".to_string())
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = host;
+        Err("当前平台不支持 ping".to_string())
+    }
+}
+
+/// 从 "time=12ms" / "time<1ms" 行提取毫秒数
+#[cfg(windows)]
+fn parse_ping_ms(lower_line: &str) -> Option<u64> {
+    let bytes = lower_line.as_bytes();
+    let mut i = 0;
+    while i + 1 < bytes.len() {
+        if bytes[i] == b'm' && (bytes[i + 1] == b's' || bytes[i + 1] == b'S') {
+            // 回溯数字（允许 '='、'<'、空格分隔）
+            let mut j = i;
+            while j > 0 && (bytes[j - 1] == b' ' || bytes[j - 1] == b'\t') {
+                j -= 1;
+            }
+            let end = j;
+            while j > 0 && bytes[j - 1].is_ascii_digit() {
+                j -= 1;
+            }
+            if j < end {
+                if let Ok(ms) = lower_line[j..end].parse::<u64>() {
+                    return Some(ms);
+                }
+            }
+            return None;
+        }
+        i += 1;
+    }
+    None
+}
+
 // ==================== 应用设置 ====================
 
 /// 获取应用行为设置（托盘可见性等）
@@ -406,6 +471,7 @@ pub fn run() {
             import_configs,
             get_settings,
             save_settings,
+            ping_host,
             get_logs,
             clear_logs,
             export_logs,

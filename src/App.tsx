@@ -14,6 +14,7 @@ import {
   Settings,
 } from 'lucide-react';
 import { initTauriListeners } from './lib/tauri';
+import { HomePage } from './components/HomePage';
 import { StatusPanel } from './components/StatusPanel';
 import { ConfigForm } from './components/ConfigForm';
 import { ConfigHistory } from './components/ConfigHistory';
@@ -134,15 +135,11 @@ export default function App() {
         />
       </Layout.Sider>
       <Layout.Content style={{ padding: 24, overflow: 'auto' }}>
-        {page === 'home' && (
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 16 }}>
+        {page === 'home' && <HomePage />}
+        {page === 'connect' && (
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 16, maxWidth: 860 }}>
             <StatusPanel />
             <DeviceList />
-          </div>
-        )}
-        {page === 'connect' && (
-          <div style={{ maxWidth: 640 }}>
-            <StatusPanel />
           </div>
         )}
         {page === 'config' && (
