@@ -8,14 +8,15 @@
 
 | 类别 | 功能 |
 |------|------|
-| 连接管理 | vnt-cli Sidecar 启动/停止、5 态状态机（未连接/连接中/已连接/重连中/错误）、崩溃后指数退避自动重连（最多 10 次） |
-| 系统集成 | 系统托盘（连接切换/显示隐藏/设置/退出）、关闭窗口最小化到托盘、开机自启（静默启动自动连接） |
+| 连接管理 | vnt-cli Sidecar 启动/停止（互斥锁 + taskkill 兜底，杜绝多实例）、5 态状态机（未连接/连接中/已连接/重连中/错误）、崩溃后指数退避自动重连（最多 10 次） |
+| 连接信息 | 设备名/虚拟 IP/真实服务器/NAT 类型（`vnt --info` 解析）、延时检测（未填服务器时自动从日志/--info 提取真实连接服务器） |
+| 系统集成 | 系统托盘（连接/断开分开菜单项、状态图标 5 态变色、tooltip 随状态、双击显示窗口、IP/Token 展示）、关闭窗口最小化到托盘、开机自启（静默启动自动连接） |
 | 配置管理 | 多配置 CRUD 与历史切换（`%APPDATA%\vnt-gui\config.json`）、配置 JSON 导入/导出、Token 显示脱敏 |
 | 实时日志 | 环形缓冲（2000 行）、级别过滤、关键字搜索、导出文件、清空 |
 | 流量统计 | Windows 原生 `GetIfTable2` 采集虚拟网卡收发增量（无需安装 Npcap）、Recharts 折线图、速率告警（系统通知） |
-| 设备列表 | 每 5 秒轮询 `vnt-cli --list` 解析在线设备（P2P/中继、延迟、复制 IP） |
+| 设备列表 | 每 5 秒轮询 `vnt-cli --list`（**携带活动配置 token**，仅显示本组网设备、过滤本机），P2P/中继标识、Rt 延迟、延时分级着色（绿≤60/橙≤120/红>120）、离线不检测、复制 IP |
 | 软件更新 | **vnt-cli 版本检测**（对比本地与 GitHub 上游 vnt-dev/vnt 最新 release，一键下载替换）；**GUI 版本检测**（对比本仓库 w2018/vnt-gui-dev 的 GitHub Releases） |
-| 体验 | 首次启动向导、深色/浅色主题、Ctrl+Shift+V 全局快捷键（显示/隐藏窗口） |
+| 体验 | 首次启动向导、深色/浅色主题、延时分级着色、Ctrl+Shift+V 全局快捷键（显示/隐藏窗口） |
 
 ## 技术栈
 
@@ -33,7 +34,7 @@ vnt-gui/
 │   └── lib/                    # tauri.ts（invoke 封装 + 事件监听）、types.ts、theme.ts
 ├── src-tauri/
 │   ├── src/                    # Rust 后端
-│   │   ├── lib.rs              # Tauri 入口、插件注册、18 个 tauri::command
+│   │   ├── lib.rs              # Tauri 入口、插件注册、20 个 tauri::command
 │   │   ├── sidecar.rs          # vnt-cli 进程管理（spawn/停止/输出解析/重连）★核心
 │   │   ├── config.rs           # 配置持久化（%APPDATA%/vnt-gui/config.json）
 │   │   ├── tray.rs             # 系统托盘
@@ -92,9 +93,8 @@ CI 工作流会自动下载最新 vnt-cli。
 ## 已知限制
 
 - 本机中文路径下 WiX（MSI 打包）不可用，生产交付使用 NSIS
-- 设备列表依赖 `vnt-cli --list` 输出格式，为尽力解析（未连接时返回空）
+- `--list` / `--info` 需要 vnt-cli 后台运行（连接中）才返回有效数据，未连接时设备列表为空
 - Token/密码明文存储于 `%APPDATA%\vnt-gui\config.json`（keyring/DPAPI 加密列为后续增强）
-- 托盘图标暂用 Tauri 默认图标（5 态共用，tooltip 区分状态）
 
 ## 致谢
 
