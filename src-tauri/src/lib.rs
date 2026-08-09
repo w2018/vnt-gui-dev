@@ -230,28 +230,43 @@ async fn ping_impl(ip: std::net::IpAddr) -> Result<(u64, usize), String> {
 
 #[cfg(test)]
 mod ping_tests {
+    use super::parse_info;
     use super::parse_list_line;
     use super::ping_impl;
 
     #[test]
     fn list_line_parses_real_output() {
-        // 本机实测 vnt-cli --list 输出
-        let table_header = "Name        Virtual Ip    Status     P2P/Relay    Rt";
+        // 本机实测 vnt-cli --list -k <token> 输出（真实格式，含空格设备名）
+        let table_header = "Name                Virtual Ip    Status     P2P/Relay       Rt";
         assert!(parse_list_line(table_header).is_none());
-        let offline = parse_list_line("Z           10.26.0.2     Offline").unwrap();
+        // 离线行
+        let offline = parse_list_line("Z                   10.26.0.2     Offline").unwrap();
         assert_eq!(offline.name, "Z");
         assert_eq!(offline.virtual_ip, "10.26.0.2");
         assert_eq!(offline.status, "offline");
-        let offline2 = parse_list_line("RNA-AL00    10.26.0.3     Offline").unwrap();
-        assert_eq!(offline2.name, "RNA-AL00");
-        assert_eq!(offline2.virtual_ip, "10.26.0.3");
-        assert_eq!(offline2.status, "offline");
-        // 在线行（模拟）
-        let online = parse_list_line("Phone   10.26.0.9    Online    P2P   12ms").unwrap();
+        // 在线行：设备名含空格 + server-relay + Rt 列 148
+        let online = parse_list_line("RNA-AL00 4.2.0.1    10.26.0.4     Online     server-relay    148").unwrap();
+        assert_eq!(online.name, "RNA-AL00 4.2.0.1");
+        assert_eq!(online.virtual_ip, "10.26.0.4");
         assert_eq!(online.status, "online");
-        assert_eq!(online.latency, 12);
-        assert_eq!(online.connection_type, "p2p");
+        assert_eq!(online.connection_type, "relay");
+        assert_eq!(online.latency, 148);
+        // 在线行 P2P
+        let p2p = parse_list_line("Phone   10.26.0.9    Online    P2P    12").unwrap();
+        assert_eq!(p2p.connection_type, "p2p");
+        assert_eq!(p2p.latency, 12);
         assert!(parse_list_line("").is_none());
+    }
+
+    #[test]
+    fn info_parses_real_output() {
+        // 用户实测 vnt --info 输出
+        let (name, ip) = parse_info("Name: Z\nVirtual ip: 10.26.0.3");
+        assert_eq!(name.as_deref(), Some("Z"));
+        assert_eq!(ip.as_deref(), Some("10.26.0.3"));
+        // 失败输出（无后台）不产生脏数据
+        let (n, i) = parse_info("Os { code: 10054, kind: ConnectionReset }");
+        assert!(n.is_none() && i.is_none());
     }
 
     #[tokio::test]
@@ -379,15 +394,77 @@ async fn get_vnt_version(app: tauri::AppHandle) -> Result<String, String> {
 }
 
 /// 获取在线设备列表（后台运行 vnt 时执行 `--list` 解析，尽力而为）
-/// 返回：过滤本机后的设备列表 + 本机设备信息（本机虚拟 IP 来自 register 日志解析）
+/// 关键：必须携带活动配置的 token/server（-k/-s），否则查询的是默认空 token 组（别人的设备）
+/// 本机识别：优先 `--info`（Name/Virtual ip），失败降级 register 日志/配置设备名/主机名
+/// 返回：过滤本机后的设备列表 + 本机设备信息
 #[tauri::command]
 async fn get_device_list(app: tauri::AppHandle) -> Result<state::DeviceListResult, String> {
     use tauri_plugin_shell::ShellExt;
+
+    // 活动配置参数（--list / --info 共用）
+    let store = config::load_config_store();
+    let active = store.get_active();
+    let mut net_args: Vec<String> = Vec::new();
+    if let Some(cfg) = &active {
+        if !cfg.token.is_empty() {
+            net_args.push("-k".to_string());
+            net_args.push(cfg.token.clone());
+        }
+        if let Some(server) = &cfg.server_address {
+            net_args.push("-s".to_string());
+            net_args.push(server.clone());
+        }
+    }
+
+    // 1. 本机信息：优先 --info（需后台 vnt-cli 运行；失败自然降级）
+    let mut local_name: Option<String> = None;
+    let mut local_ip: Option<String> = None;
+    if let Ok(info_output) = app
+        .shell()
+        .sidecar("vnt-cli")
+        .map_err(|e| format!("sidecar 不可用: {}", e))?
+        .args({
+            let mut a = vec!["--info".to_string()];
+            a.extend(net_args.iter().cloned());
+            a
+        })
+        .output()
+        .await
+    {
+        let stdout = String::from_utf8_lossy(&info_output.stdout);
+        let stderr = String::from_utf8_lossy(&info_output.stderr);
+        let text = if !stdout.trim().is_empty() { &stdout } else { &stderr };
+        let (n, i) = parse_info(text);
+        local_name = n;
+        local_ip = i;
+    }
+    // 降级：register 日志解析的本机 IP + 配置设备名/主机名
+    if local_name.is_none() {
+        local_name = active
+            .as_ref()
+            .and_then(|c| c.device_name.clone())
+            .filter(|n| !n.is_empty())
+            .or_else(|| {
+                let h = std::env::var("COMPUTERNAME").unwrap_or_default();
+                if h.is_empty() { None } else { Some(h) }
+            });
+    }
+    if local_ip.is_none() {
+        let state: tauri::State<'_, AppState> = app.state();
+        local_ip = state.virtual_ip.lock().clone();
+    }
+
+    // 2. --list 解析设备
+    let list_args = {
+        let mut a = vec!["--list".to_string()];
+        a.extend(net_args.iter().cloned());
+        a
+    };
     let output = app
         .shell()
         .sidecar("vnt-cli")
         .map_err(|e| format!("sidecar 不可用: {}", e))?
-        .args(["--list"])
+        .args(&list_args)
         .output()
         .await
         .map_err(|e| format!("执行 vnt-cli --list 失败: {}", e))?;
@@ -408,56 +485,83 @@ async fn get_device_list(app: tauri::AppHandle) -> Result<state::DeviceListResul
         peers
     };
 
-    // 本机识别：register ip= 日志解析出的本机虚拟 IP
-    let local_ip = {
-        let state: tauri::State<'_, AppState> = app.state();
-        let guard = state.virtual_ip.lock();
-        guard.clone()
-    };
-
+    // 3. 过滤本机：IP 匹配 或 设备名匹配（覆盖残留注册：同名不同 IP 的历史行也过滤）
     let mut devices = Vec::with_capacity(peers.len());
     let mut local = None;
     for peer in peers {
-        if let Some(ip) = &local_ip {
-            if &peer.virtual_ip == ip {
-                local = Some(peer);
-                continue;
-            }
+        let is_local = match &local_ip {
+            Some(ip) => peer.virtual_ip == *ip || match &local_name {
+                Some(n) => peer.name.eq_ignore_ascii_case(n),
+                None => false,
+            },
+            None => match &local_name {
+                Some(n) => peer.name.eq_ignore_ascii_case(n),
+                None => false,
+            },
+        };
+        if is_local {
+            local = Some(peer);
+            continue;
         }
         devices.push(peer);
     }
     Ok(state::DeviceListResult { devices, local })
 }
 
-/// 解析 vnt-cli --list 单行输出（真实格式："Z 10.26.0.2 Offline"）
+/// 解析 vnt --info 输出（Name: Z / Virtual ip: 10.26.0.3）
+fn parse_info(text: &str) -> (Option<String>, Option<String>) {
+    let mut name = None;
+    let mut ip = None;
+    for line in text.lines() {
+        let line = line.trim();
+        let lower = line.to_lowercase();
+        if lower.starts_with("name:") {
+            name = Some(line["name:".len()..].trim().to_string());
+        } else if lower.starts_with("virtual ip:") {
+            ip = Some(line["virtual ip:".len()..].trim().to_string());
+        }
+    }
+    (name, ip)
+}
+
+/// 解析 vnt-cli --list 单行输出（真实格式，列空格对齐，设备名可含空格）：
+///   Z                   10.26.0.2     Offline
+///   RNA-AL00 4.2.0.1    10.26.0.4     Online     server-relay    148
 fn parse_list_line(line: &str) -> Option<state::PeerInfo> {
     let line = line.trim();
     if line.is_empty() || line.to_lowercase().starts_with("name") {
         return None;
     }
     let ip = extract_ip(line)?;
-    let name = line
-        .split_whitespace()
-        .next()
-        .unwrap_or("未知设备")
-        .trim_matches('|')
-        .to_string();
-    // 状态列：Offline 设备不参与 ping（前端显示离线）
-    let status = if line.contains("Offline") {
-        "offline"
-    } else {
-        "online"
-    };
-    Some(state::PeerInfo {
-        name,
-        virtual_ip: ip,
-        connection_type: if line.to_lowercase().contains("relay") {
+    let ip_pos = line.find(&ip)?;
+    // 设备名 = IP 之前的文本（含空格，去掉右侧空白与表格边框）
+    let name = line[..ip_pos].trim().trim_matches('|').trim().to_string();
+    let rest = &line[ip_pos + ip.len()..];
+    let mut parts = rest.split_whitespace();
+    let status = parts.next().unwrap_or("offline").to_string();
+    let status_lower = status.to_lowercase();
+    // 连接类型：在线行 P2P/Relay 列
+    let connection_type = if status_lower == "online" {
+        let t = parts.next().unwrap_or("p2p");
+        if t.to_lowercase().contains("relay") {
             "relay".to_string()
         } else {
             "p2p".to_string()
-        },
-        latency: extract_latency(line),
-        status: status.to_string(),
+        }
+    } else {
+        "p2p".to_string()
+    };
+    // Rt 列（服务器中继延迟，纯数字）或行内 ms 值
+    let latency = parts
+        .next()
+        .and_then(|t| t.parse::<u64>().ok())
+        .unwrap_or_else(|| extract_latency(line));
+    Some(state::PeerInfo {
+        name,
+        virtual_ip: ip,
+        connection_type,
+        latency,
+        status: status_lower,
     })
 }
 

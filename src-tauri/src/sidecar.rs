@@ -96,8 +96,19 @@ pub fn build_args(config: &VntConfig) -> Vec<String> {
 
 /// 启动 vnt-cli sidecar（文档 §3.3.1，同步入口，内部 spawn 监听任务）
 pub fn start_vnt(app: AppHandle, config: VntConfig) -> Result<(), String> {
+    // 进程互斥：autostart 自动连接与手动/托盘连接并发时，杜绝双进程
+    // （state 声明在函数级，保证 guard 存活期间借用有效）
+    let state: State<'_, AppState> = app.state();
+    let _guard = state.process_lock.lock();
+
     // 先清理可能残留的旧进程
-    stop_vnt(app.clone())?;
+    stop_vnt_locked(&app);
+
+    // 清除上一轮连接的虚拟 IP
+    {
+        let state: State<'_, AppState> = app.state();
+        *state.virtual_ip.lock() = None;
+    }
 
     // 清除上一轮连接的虚拟 IP
     {
@@ -156,10 +167,18 @@ pub fn start_vnt(app: AppHandle, config: VntConfig) -> Result<(), String> {
     Ok(())
 }
 
-/// 优雅停止 vnt-cli（文档 §3.3.4，同步实现）
+/// 优雅停止 vnt-cli（文档 §3.3.4，同步实现，外层带互斥锁）
 pub fn stop_vnt(app: AppHandle) -> Result<(), String> {
+    let state: State<'_, AppState> = app.state();
+    let _guard = state.process_lock.lock();
+    stop_vnt_locked(&app);
+    Ok(())
+}
+
+/// 停止逻辑（调用方须持有 process_lock；start_vnt/stop_vnt 共用，避免重入死锁）
+fn stop_vnt_locked(app: &AppHandle) {
     // 先置 Stopped，这样 Terminated 事件触发时不重连
-    emit_status(&app, ConnectionStatus::Stopped);
+    emit_status(app, ConnectionStatus::Stopped);
 
     let state: State<'_, AppState> = app.state();
     let child = state.sidecar_child.write().take();
@@ -170,7 +189,29 @@ pub fn stop_vnt(app: AppHandle) -> Result<(), String> {
             Err(e) => log::warn!("kill 失败: {}", e),
         }
     }
-    Ok(())
+    // 兜底：等待 300ms 后按镜像名清理残留（覆盖 kill 未生效/历史遗留进程）
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    kill_residual_vnt_cli();
+}
+
+/// 按镜像名强制清理残留 vnt-cli（taskkill /F /IM），防止多实例残留
+/// 注意：tauri externalBin 部署时会去掉 target triple 后缀，进程名是 "vnt-cli.exe"
+fn kill_residual_vnt_cli() {
+    let exe = "vnt-cli.exe";
+    let output = std::process::Command::new("taskkill")
+        .args(["/F", "/IM", exe])
+        .output();
+    match output {
+        Ok(o) => {
+            if o.status.success() {
+                log::info!("已清理残留 vnt-cli 进程");
+            } else {
+                // 无进程时 taskkill 返回非 0，正常
+                log::debug!("无残留 vnt-cli（taskkill: {}）", o.status);
+            }
+        }
+        Err(e) => log::warn!("taskkill 执行失败: {}", e),
+    }
 }
 
 /// 处理一行输出：写入日志 + 状态机转换（文档 §3.3.3）
