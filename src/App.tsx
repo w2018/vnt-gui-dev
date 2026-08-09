@@ -146,7 +146,7 @@ export default function App() {
           </div>
         )}
         {page === 'config' && (
-          <div style={{ display: 'grid', gridTemplateColumns: '340px 1fr', gap: 16 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 16 }}>
             <ConfigHistory onEdit={setEditing} />
             <ConfigForm config={editing ?? undefined} key={editing?.id ?? 'new'} />
           </div>

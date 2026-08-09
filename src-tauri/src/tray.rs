@@ -14,9 +14,13 @@
 //!
 //! 交互：左键弹菜单；双击图标显示主窗口；图标/tooltip 随连接状态实时切换。
 
+use std::time::Duration;
+
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager};
+use tauri_plugin_notification::NotificationExt;
+use tauri_plugin_clipboard_manager::ClipboardExt;
 
 use crate::config::load_config_store;
 use crate::sidecar::{self, load_active_config};
@@ -34,8 +38,8 @@ const ICON_DISCONNECTED: &[u8] = include_bytes!("../icons/tray-disconnected.png"
 
 /// 创建系统托盘
 pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
-    // 状态行：disabled，动态文本
-    let status_item = MenuItem::with_id(app, "status", "VNT GUI - 未连接", false, None::<&str>)?;
+    // 状态行：可点击（点击复制 IP），动态文本
+    let status_item = MenuItem::with_id(app, "copy_ip", "VNT GUI - 未连接", true, None::<&str>)?;
     let connect_item = MenuItem::with_id(app, "connect", "连接", true, None::<&str>)?;
     let disconnect_item = MenuItem::with_id(app, "disconnect", "断开", false, None::<&str>)?;
     let show_item = MenuItem::with_id(app, "toggle_window", "显示/隐藏窗口", true, None::<&str>)?;
@@ -86,17 +90,26 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
             });
         })
         .on_tray_icon_event(|tray, event| {
-            // 双击托盘图标 → 显示主窗口
+            // 双击托盘图标 → 显示主窗口（并恢复托盘可见）
             if let TrayIconEvent::DoubleClick { .. } = event {
-                if let Some(window) = tray.app_handle().get_webview_window("main") {
-                    let _ = window.show();
-                    let _ = window.set_focus();
-                }
+                show_main_window(&tray.app_handle());
             }
         })
         .build(app)?;
 
     Ok(())
+}
+
+/// 显示主窗口并恢复托盘可见（供菜单/双击/快捷键共用）
+pub fn show_main_window(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+    // 恢复托盘可见（后台隐藏托盘开关下，显示窗口时重新出现）
+    if let Some(tray) = app.tray_by_id(TRAY_ID) {
+        let _ = tray.set_visible(true);
+    }
 }
 
 /// 托盘菜单事件处理
@@ -112,6 +125,50 @@ async fn handle_tray_menu(app: AppHandle, item_id: &str) {
         "disconnect" => {
             let _ = sidecar::stop_vnt(app);
         }
+        // 2b：点击状态行 → 复制当前 IP 到剪贴板
+        "copy_ip" => {
+            let ip = {
+                let state: tauri::State<'_, AppState> = app.state();
+                let ip = state.virtual_ip.lock().clone();
+                ip
+            };
+            if let Some(ip) = ip {
+                let copied = app.clipboard().write_text(ip.clone()).is_ok();
+                let _ = app
+                    .notification()
+                    .builder()
+                    .title(if copied { "IP 已复制" } else { "复制失败" })
+                    .body(if copied {
+                        format!("{} 已复制到剪贴板", ip)
+                    } else {
+                        "无法访问系统剪贴板".to_string()
+                    })
+                    .show();
+                if copied {
+                    // 临时变更 tooltip 反馈 2 秒后恢复
+                    if let Some(tray) = app.tray_by_id(TRAY_ID) {
+                        let _ = tray.set_tooltip(Some("IP 已复制"));
+                    }
+                    let app2 = app.clone();
+                    tauri::async_runtime::spawn(async move {
+                        tokio::time::sleep(Duration::from_secs(2)).await;
+                        let status = {
+                            let s: tauri::State<'_, AppState> = app2.state();
+                            let status = s.connection.read().clone();
+                            status
+                        };
+                        update_tray_status(&app2, &status);
+                    });
+                }
+            } else {
+                let _ = app
+                    .notification()
+                    .builder()
+                    .title("VNT GUI")
+                    .body("当前未连接，没有可复制的 IP")
+                    .show();
+            }
+        }
         "toggle_window" => {
             if let Some(window) = app.get_webview_window("main") {
                 match window.is_visible() {
@@ -119,25 +176,18 @@ async fn handle_tray_menu(app: AppHandle, item_id: &str) {
                         let _ = window.hide();
                     }
                     _ => {
-                        let _ = window.show();
-                        let _ = window.set_focus();
+                        show_main_window(&app);
                     }
                 }
             }
         }
         "open_settings" => {
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.show();
-                let _ = window.set_focus();
-                let _ = window.emit("navigate", "/settings");
-            }
+            show_main_window(&app);
+            let _ = app.emit("navigate", "/settings");
         }
         "open_traffic" => {
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.show();
-                let _ = window.set_focus();
-                let _ = window.emit("navigate", "/traffic");
-            }
+            show_main_window(&app);
+            let _ = app.emit("navigate", "/traffic");
         }
         "quit" => {
             // 先停止 sidecar，再退出
@@ -166,16 +216,20 @@ pub fn update_tray_status(app: &AppHandle, status: &ConnectionStatus) {
         let _ = tray.set_icon(Some(icon));
     }
 
-    // 2. tooltip
+    // 2. tooltip（2a：编号始终可见）
+    let token_short = load_config_store()
+        .get_active()
+        .map(|c| mask_token(&c.token))
+        .unwrap_or_else(|| "-".to_string());
     let tooltip = match status {
-        ConnectionStatus::Connected => "VNT GUI - 已连接",
+        ConnectionStatus::Connected => format!("VNT GUI - 已连接  编号:{}", token_short),
         ConnectionStatus::Starting | ConnectionStatus::Reconnecting { .. } => {
-            "VNT GUI - 连接中..."
+            format!("VNT GUI - 连接中...  编号:{}", token_short)
         }
-        ConnectionStatus::Error { .. } => "VNT GUI - 错误",
-        ConnectionStatus::Stopped => "VNT GUI - 未连接",
+        ConnectionStatus::Error { .. } => format!("VNT GUI - 错误  编号:{}", token_short),
+        ConnectionStatus::Stopped => format!("VNT GUI - 未连接  编号:{}", token_short),
     };
-    let _ = tray.set_tooltip(Some(tooltip));
+    let _ = tray.set_tooltip(Some(&tooltip));
 
     // 3. 菜单：连接/断开动态启用 + 状态行文本（句柄存于 AppState）
     let items = {
@@ -190,23 +244,24 @@ pub fn update_tray_status(app: &AppHandle, status: &ConnectionStatus) {
     let _ = items.connect.set_enabled(!running);
     let _ = items.disconnect.set_enabled(running);
 
-    // 4. 状态行：状态 + 当前 IP + 组网编号（脱敏显示）
+    // 4. 状态行（可点击复制 IP）：状态 + 当前 IP + 组网编号（脱敏，编号始终展示）
     let ip = {
         let state: tauri::State<'_, AppState> = app.state();
         let ip = state.virtual_ip.lock().clone();
         ip
     };
-    let token = load_config_store().get_active().map(|c| mask_token(&c.token));
     let text = match status {
         ConnectionStatus::Connected => format!(
             "已连接  IP:{}  编号:{}",
             ip.as_deref().unwrap_or("-"),
-            token.as_deref().unwrap_or("-")
+            token_short
         ),
-        ConnectionStatus::Starting => "连接中...".to_string(),
-        ConnectionStatus::Reconnecting { attempt } => format!("重连中 (第 {} 次)", attempt),
-        ConnectionStatus::Error { .. } => "连接错误".to_string(),
-        ConnectionStatus::Stopped => "未连接".to_string(),
+        ConnectionStatus::Starting => format!("连接中...  编号:{}", token_short),
+        ConnectionStatus::Reconnecting { attempt } => {
+            format!("重连中 (第 {} 次)  编号:{}", attempt, token_short)
+        }
+        ConnectionStatus::Error { .. } => format!("连接错误  编号:{}", token_short),
+        ConnectionStatus::Stopped => format!("未连接  编号:{}", token_short),
     };
     let _ = items.status.set_text(text);
 }

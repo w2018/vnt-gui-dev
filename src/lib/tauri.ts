@@ -7,6 +7,7 @@ import { useDeviceStore } from '../stores/deviceStore';
 import { useLogStore } from '../stores/logStore';
 import { useTrafficStore } from '../stores/trafficStore';
 import type {
+  AppSettings,
   ConfigStore,
   ConnectionStatus,
   LogEntry,
@@ -27,6 +28,8 @@ export const api = {
   setActiveConfig: (id: string) => invoke<void>('set_active_config', { id }),
   exportConfigs: (path: string) => invoke<void>('export_configs', { path }),
   importConfigs: (path: string) => invoke<VntConfig[]>('import_configs', { path }),
+  getSettings: () => invoke<AppSettings>('get_settings'),
+  saveSettings: (settings: AppSettings) => invoke<void>('save_settings', { settings }),
   getLogs: () => invoke<LogEntry[]>('get_logs'),
   clearLogs: () => invoke<void>('clear_logs'),
   exportLogs: (path: string) => invoke<void>('export_logs', { path }),

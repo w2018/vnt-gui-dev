@@ -36,6 +36,9 @@ export function SettingsPanel() {
   const [alertDown, setAlertDown] = useState<number>(10);
   const [version, setVersion] = useState('');
   const [vntVersion, setVntVersion] = useState('');
+  // 托盘可见性设置（1a/1b）
+  const [hideTrayAutostart, setHideTrayAutostart] = useState(false);
+  const [hideTrayBackground, setHideTrayBackground] = useState(false);
   // 初始状态加载完成前禁用交互，避免异步结果覆盖用户操作
   const [initializing, setInitializing] = useState(true);
   const { save } = useConfigStore();
@@ -79,10 +82,28 @@ export function SettingsPanel() {
       } catch {
         /* 忽略 */
       }
+      try {
+        const s = await api.getSettings();
+        setHideTrayAutostart(s.hide_tray_on_autostart);
+        setHideTrayBackground(s.hide_tray_on_background);
+      } catch {
+        /* 忽略 */
+      }
       setInitializing(false);
     })();
     return unsub;
   }, []);
+
+  // 托盘可见性设置变更时自动持久化（消除闭包旧值问题）
+  useEffect(() => {
+    if (initializing) return;
+    void api
+      .saveSettings({
+        hide_tray_on_autostart: hideTrayAutostart,
+        hide_tray_on_background: hideTrayBackground,
+      })
+      .catch((e) => message.error(`保存设置失败: ${String(e)}`));
+  }, [hideTrayAutostart, hideTrayBackground, initializing]);
 
   const handleAutostart = async (v: boolean) => {
     try {
@@ -208,6 +229,42 @@ export function SettingsPanel() {
             </Col>
             <Col>
               <Switch checked={shortcut} disabled={initializing} onChange={handleShortcut} />
+            </Col>
+          </Row>
+          <Divider style={{ margin: '4px 0' }} />
+          <Row align="middle" justify="space-between">
+            <Col>
+              <Typography.Text strong>开机自启时不显示托盘</Typography.Text>
+              <div>
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  通过开机自启启动时静默后台运行（不显示托盘图标）
+                </Typography.Text>
+              </div>
+            </Col>
+            <Col>
+              <Switch
+                checked={hideTrayAutostart}
+                disabled={initializing}
+                onChange={setHideTrayAutostart}
+              />
+            </Col>
+          </Row>
+          <Divider style={{ margin: '4px 0' }} />
+          <Row align="middle" justify="space-between">
+            <Col>
+              <Typography.Text strong>后台运行时隐藏托盘</Typography.Text>
+              <div>
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  关闭窗口进入后台时隐藏托盘图标（无托盘入口，需再次启动或快捷键唤出）
+                </Typography.Text>
+              </div>
+            </Col>
+            <Col>
+              <Switch
+                checked={hideTrayBackground}
+                disabled={initializing}
+                onChange={setHideTrayBackground}
+              />
             </Col>
           </Row>
         </Space>

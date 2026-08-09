@@ -67,6 +67,12 @@ export interface PeerInfo {
   status: 'online' | 'offline';
 }
 
+/** 应用行为设置（托盘可见性等） */
+export interface AppSettings {
+  hide_tray_on_autostart: boolean;
+  hide_tray_on_background: boolean;
+}
+
 export interface UpdateInfo {
   has_update: boolean;
   latest_version: string;

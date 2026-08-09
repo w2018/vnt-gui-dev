@@ -3,6 +3,7 @@
 mod autostart;
 mod config;
 mod logger;
+mod settings;
 mod sidecar;
 mod state;
 mod traffic;
@@ -16,6 +17,7 @@ use tauri::{Manager, State};
 use tauri_plugin_autostart::ManagerExt;
 
 use config::{ConfigStore, VntConfig};
+use settings::AppSettings;
 use state::{AppState, ConnectionStatus, LogEntry, TrafficSnapshot};
 use updater::UpdateInfo;
 
@@ -106,6 +108,20 @@ fn import_configs(path: String) -> Result<Vec<VntConfig>, String> {
     let store: ConfigStore =
         serde_json::from_str(&content).map_err(|e| format!("解析失败: {}", e))?;
     Ok(store.configs)
+}
+
+// ==================== 应用设置 ====================
+
+/// 获取应用行为设置（托盘可见性等）
+#[tauri::command]
+fn get_settings() -> AppSettings {
+    settings::load_settings()
+}
+
+/// 保存应用行为设置
+#[tauri::command]
+fn save_settings(settings: AppSettings) -> Result<(), String> {
+    settings::save_settings(&settings)
 }
 
 // ==================== 日志 ====================
@@ -306,6 +322,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .setup(|app| {
             // 全局状态
@@ -328,6 +345,13 @@ pub fn run() {
             // 开机自启：延迟 3 秒自动连接（等系统网络就绪）
             let args: Vec<String> = std::env::args().collect();
             if args.iter().any(|a| a == autostart::AUTOSTART_FLAG) {
+                // 1a：自启启动时按设置隐藏托盘（静默后台运行）
+                if settings::load_settings().hide_tray_on_autostart {
+                    if let Some(tray) = app.tray_by_id(tray::TRAY_ID) {
+                        let _ = tray.set_visible(false);
+                        log::info!("开机自启：按设置隐藏托盘");
+                    }
+                }
                 let handle = app.handle().clone();
                 tauri::async_runtime::spawn(async move {
                     tokio::time::sleep(Duration::from_secs(3)).await;
@@ -347,6 +371,13 @@ pub fn run() {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
                 let _ = window.hide();
+                // 1b：后台运行时按设置隐藏托盘（无托盘入口）
+                if settings::load_settings().hide_tray_on_background {
+                    if let Some(tray) = window.app_handle().tray_by_id(tray::TRAY_ID) {
+                        let _ = tray.set_visible(false);
+                        log::info!("进入后台：按设置隐藏托盘");
+                    }
+                }
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -359,6 +390,8 @@ pub fn run() {
             set_active_config,
             export_configs,
             import_configs,
+            get_settings,
+            save_settings,
             get_logs,
             clear_logs,
             export_logs,
