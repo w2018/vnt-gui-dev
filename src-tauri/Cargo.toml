@@ -1,6 +1,6 @@
 [package]
 name = "vnt-gui"
-version = "1.0.0"
+version = "1.0.2"
 description = "VNT 虚拟局域网图形化管理工具"
 authors = ["vnt-gui"]
 edition = "2021"

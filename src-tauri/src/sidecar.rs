@@ -195,6 +195,11 @@ fn handle_output_line(app: &AppHandle, line: &str, is_stderr: bool) {
         let msg = extract_error_message(line);
         emit_status(app, ConnectionStatus::Error { message: msg });
     }
+
+    // 解析延迟（如 "latency: 12ms" / "12 ms"），实时推送到前端
+    if let Some(ms) = extract_latency(line) {
+        let _ = app.emit("latency-update", ms);
+    }
 }
 
 /// 进程终止处理：指数退避重连（文档 §3.3.3）
@@ -290,6 +295,41 @@ fn push_log(app: &AppHandle, level: LogLevel, message: String) {
     let _ = app.emit("log-line", &entry);
 }
 
+/// 从输出行提取延迟毫秒数（匹配 "latency: 12ms"、"延迟 12 ms"、"12ms"）
+fn extract_latency(line: &str) -> Option<u64> {
+    let lower = line.to_lowercase();
+    // 优先在 latency / 延迟 关键字之后查找，避免误匹配其他数字
+    let search_in = match lower.find("latency").or_else(|| lower.find("延迟")) {
+        Some(i) => &lower[i..],
+        None => lower.as_str(),
+    };
+    let bytes = search_in.as_bytes();
+    let mut i = 0;
+    while i + 1 < bytes.len() {
+        // 定位 "ms" 位置
+        if bytes[i] == b'm' && (bytes[i + 1] == b's' || bytes[i + 1] == b'S') {
+            // 向前回溯数字（允许空格分隔，如 "12 ms"）
+            let mut j = i;
+            while j > 0 && (bytes[j - 1] == b' ' || bytes[j - 1] == b'\t') {
+                j -= 1;
+            }
+            let end = j;
+            while j > 0 && bytes[j - 1].is_ascii_digit() {
+                j -= 1;
+            }
+            if j < end {
+                let num = &search_in[j..end];
+                if let Ok(ms) = num.parse::<u64>() {
+                    return Some(ms);
+                }
+            }
+            return None;
+        }
+        i += 1;
+    }
+    None
+}
+
 /// 解析 "register ip=10.26.0.3 ,netmask=..." 中的虚拟 IP
 fn parse_virtual_ip(line: &str) -> Option<String> {
     let idx = line.find("ip=")?;
@@ -312,5 +352,61 @@ fn extract_error_message(line: &str) -> String {
         format!("{}...", truncated)
     } else {
         msg.to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn latency_parses_common_formats() {
+        assert_eq!(extract_latency("latency: 12ms"), Some(12));
+        assert_eq!(extract_latency("latency 12 ms"), Some(12));
+        assert_eq!(extract_latency("延迟：8ms"), Some(8));
+        assert_eq!(extract_latency("ping 25ms"), Some(25));
+        assert_eq!(extract_latency("latency:120ms"), Some(120));
+    }
+
+    #[test]
+    fn latency_rejects_non_latency_lines() {
+        assert_eq!(extract_latency("connect count: 3"), None);
+        assert_eq!(extract_latency("handshake with server success"), None);
+        assert_eq!(extract_latency(""), None);
+        assert_eq!(extract_latency("register ip=10.26.0.3 ,netmask=255.255.255.0"), None);
+    }
+
+    #[test]
+    fn build_args_maps_config() {
+        let cfg = crate::config::VntConfig {
+            id: "1".into(),
+            name: "t".into(),
+            token: "tok".into(),
+            device_name: Some("pc".into()),
+            device_id: None,
+            virtual_ip: Some("10.26.0.9".into()),
+            server_address: Some("vnt.example.com:29871".into()),
+            password: Some("pwd".into()),
+            server_encrypt: true,
+            in_ips: vec!["192.168.1.0/24".into()],
+            out_ips: vec![],
+            compressor: Some("lz4".into()),
+            mtu: Some(1400),
+            use_tcp: true,
+            use_ws: false,
+            no_proxy: true,
+            created_at: String::new(),
+            updated_at: String::new(),
+            last_used: None,
+        };
+        let args = build_args(&cfg);
+        assert!(args.contains(&"-k".to_string()));
+        assert!(args.contains(&"tok".to_string()));
+        // tcp 协议应转成 -s 地址前缀
+        let s_idx = args.iter().position(|a| a == "-s").unwrap();
+        assert_eq!(args[s_idx + 1], "tcp://vnt.example.com:29871");
+        assert!(args.contains(&"-u".to_string()));
+        assert!(args.contains(&"1400".to_string()));
+        assert!(!args.contains(&"-t".to_string()));
     }
 }

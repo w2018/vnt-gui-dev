@@ -65,6 +65,13 @@ export async function initTauriListeners(): Promise<UnlistenFn[]> {
     }),
   );
 
+  // 延迟更新（由 vnt-cli 输出解析，实时推送）
+  unlisteners.push(
+    await listen<number>('latency-update', (event) => {
+      useConnectionStore.getState().setLatency(event.payload);
+    }),
+  );
+
   // 日志
   unlisteners.push(
     await listen<LogEntry>('log-line', (event) => {

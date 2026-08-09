@@ -227,8 +227,11 @@ export function SettingsPanel() {
                 disabled={initializing}
                 checked={alertEnabled}
                 onChange={(v) => {
+                  // 直接用参数 v 构造持久化（避免闭包旧 state 导致保存相反值）
                   setAlertEnabled(v);
-                  if (!v) saveAlert();
+                  const cfg = { enabled: v, up: alertUp, down: alertDown };
+                  localStorage.setItem(ALERT_KEY, JSON.stringify(cfg));
+                  message.success(v ? '流量告警已启用' : '流量告警已关闭');
                 }}
               />
             </Col>
