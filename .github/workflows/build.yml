@@ -5,6 +5,9 @@ on:
     tags: ['v*']
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: windows-latest
@@ -21,12 +24,27 @@ jobs:
         with:
           targets: x86_64-pc-windows-msvc
 
-      - name: Download vnt-cli sidecar
+      - name: Download latest vnt-cli sidecar
+        shell: pwsh
         run: |
-          $VERSION = "v1.2.17"
-          Invoke-WebRequest -Uri "https://github.com/vnt-dev/vnt/releases/download/$VERSION/vnt-cli-x86_64-pc-windows-msvc.zip" -OutFile "src-tauri/binaries/vnt-cli.zip"
-          Expand-Archive -Path "src-tauri/binaries/vnt-cli.zip" -DestinationPath "src-tauri/binaries/" -Force
-          Move-Item -Path "src-tauri/binaries/vnt-cli-x86_64-pc-windows-msvc.exe" -Destination "src-tauri/binaries/vnt-cli-x86_64-pc-windows-msvc.exe" -Force
+          $release = Invoke-RestMethod -Uri "https://api.github.com/repos/vnt-dev/vnt/releases/latest" -Headers @{ "User-Agent" = "vnt-gui-ci" }
+          $asset = $release.assets | Where-Object { $_.name -like "*x86_64-pc-windows-msvc.zip" } | Select-Object -First 1
+          if (-not $asset) { throw "未找到 vnt-cli x86_64 资产" }
+          Write-Host "下载 vnt-cli $($release.tag_name): $($asset.name)"
+          Invoke-WebRequest -Uri $asset.browser_download_url -OutFile "src-tauri/binaries/vnt-cli.zip"
+          Expand-Archive -Path "src-tauri/binaries/vnt-cli.zip" -DestinationPath "src-tauri/binaries/extract" -Force
+          $exe = Get-ChildItem "src-tauri/binaries/extract" -Recurse -Filter "*.exe" | Where-Object { $_.Name -like "vnt-cli*" } | Select-Object -First 1
+          if (-not $exe) { throw "解压后未找到 vnt-cli.exe" }
+          Copy-Item $exe.FullName "src-tauri/binaries/vnt-cli-x86_64-pc-windows-msvc.exe" -Force
+          Remove-Item "src-tauri/binaries/extract" -Recurse -Force
+          Remove-Item "src-tauri/binaries/vnt-cli.zip" -Force
+
+      - name: Download wintun.dll
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri "https://www.wintun.net/builds/wintun-0.14.1.zip" -OutFile "$env:TEMP/wintun.zip"
+          Expand-Archive -Path "$env:TEMP/wintun.zip" -DestinationPath "$env:TEMP/wintun" -Force
+          Copy-Item "$env:TEMP/wintun/bin/amd64/wintun.dll" "src-tauri/binaries/wintun.dll" -Force
 
       - name: Install dependencies
         run: npm install
@@ -38,4 +56,16 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: VNT-GUI-Windows
-          path: src-tauri/target/release/bundle/**/*.exe
+          path: |
+            src-tauri/target/release/bundle/nsis/*.exe
+            src-tauri/target/release/bundle/msi/*.msi
+          retention-days: 14
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            src-tauri/target/release/bundle/nsis/*.exe
+            src-tauri/target/release/bundle/msi/*.msi
+          generate_release_notes: true
