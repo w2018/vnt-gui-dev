@@ -24,10 +24,6 @@
         "transparent": false
       }
     ],
-    "trayIcon": {
-      "iconPath": "icons/icon.ico",
-      "menuOnLeftClick": true
-    },
     "security": {
       "csp": null
     }

@@ -74,6 +74,22 @@ export default function App() {
     return () => unlisteners.forEach((fn) => fn());
   }, [refreshConfigs, setStatus]);
 
+  // 连接状态兜底轮询：每 3 秒检测一次（事件即时更新，轮询保证可靠）
+  useEffect(() => {
+    const timer = window.setInterval(async () => {
+      try {
+        const status = await api.getStatus();
+        const current = useConnectionStore.getState().status;
+        if (status.status !== current) {
+          useConnectionStore.getState().setStatus(status.status);
+        }
+      } catch {
+        /* 忽略瞬时错误 */
+      }
+    }, 3000);
+    return () => window.clearInterval(timer);
+  }, []);
+
   // 流量告警（订阅 store，阈值存 localStorage，由设置页配置）
   useEffect(() => {
     return useTrafficStore.subscribe((state) => {
@@ -119,7 +135,7 @@ export default function App() {
       </Layout.Sider>
       <Layout.Content style={{ padding: 24, overflow: 'auto' }}>
         {page === 'home' && (
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 16 }}>
             <StatusPanel />
             <DeviceList />
           </div>

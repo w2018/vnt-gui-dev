@@ -38,6 +38,8 @@ export function SettingsPanel() {
   const [alertDown, setAlertDown] = useState<number>(10);
   const [version, setVersion] = useState('');
   const [vntVersion, setVntVersion] = useState('');
+  // 初始状态加载完成前禁用交互，避免异步结果覆盖用户操作
+  const [initializing, setInitializing] = useState(true);
   const { configs, save } = useConfigStore();
 
   // 加载初始状态
@@ -79,6 +81,7 @@ export function SettingsPanel() {
       } catch {
         /* 忽略 */
       }
+      setInitializing(false);
     })();
     return unsub;
   }, []);
@@ -176,7 +179,7 @@ export function SettingsPanel() {
               </div>
             </Col>
             <Col>
-              <Switch checked={autostart} onChange={handleAutostart} />
+              <Switch checked={autostart} disabled={initializing} onChange={handleAutostart} />
             </Col>
           </Row>
           <Divider style={{ margin: '4px 0' }} />
@@ -187,7 +190,7 @@ export function SettingsPanel() {
             <Col>
               <Space>
                 {dark ? <Moon size={14} /> : <Sun size={14} />}
-                <Switch checked={dark} onChange={handleTheme} />
+                <Switch checked={dark} disabled={initializing} onChange={handleTheme} />
               </Space>
             </Col>
           </Row>
@@ -202,7 +205,7 @@ export function SettingsPanel() {
               </div>
             </Col>
             <Col>
-              <Switch checked={shortcut} onChange={handleShortcut} />
+              <Switch checked={shortcut} disabled={initializing} onChange={handleShortcut} />
             </Col>
           </Row>
         </Space>
@@ -221,6 +224,7 @@ export function SettingsPanel() {
             </Col>
             <Col>
               <Switch
+                disabled={initializing}
                 checked={alertEnabled}
                 onChange={(v) => {
                   setAlertEnabled(v);
