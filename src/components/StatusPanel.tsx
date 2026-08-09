@@ -1,7 +1,7 @@
 // 连接状态面板（文档 §4.2.1）：延时 = 每 5 秒 ping 服务器
 
 import { useEffect, useState } from 'react';
-import { Button, Card, Descriptions, Space, Tag, Typography, message } from 'antd';
+import { Button, Card, Descriptions, Space, Tag, Tooltip, Typography, message } from 'antd';
 import { api } from '../lib/tauri';
 import { PING_INTERVAL } from '../lib/constants';
 import { useConnectionStore } from '../stores/connectionStore';
@@ -40,8 +40,9 @@ export function StatusPanel() {
     useConnectionStore();
   const { activeConfigId, configs } = useConfigStore();
   const [busy, setBusy] = useState(false);
-  // 延时检测状态：null=未检测 / true=超时 / false=正常
+  // 延时检测状态：latency=null 且 pingFail=true → 真实超时；pingError 记录失败详情（tooltip 展示）
   const [pingFail, setPingFail] = useState(false);
+  const [pingError, setPingError] = useState<string | null>(null);
 
   const active = configs.find((c) => c.id === activeConfigId);
   const running = status === 'connected' || status === 'starting' || status === 'reconnecting';
@@ -51,11 +52,17 @@ export function StatusPanel() {
   useEffect(() => {
     let cancelled = false;
     const tick = async () => {
-      const host = parseHost(useConfigStore.getState().configs.find(
-        (c) => c.id === useConfigStore.getState().activeConfigId,
-      )?.server_address);
+      const active = useConfigStore
+        .getState()
+        .configs.find((c) => c.id === useConfigStore.getState().activeConfigId);
+      const host = parseHost(active?.server_address);
       if (!host) {
-        setPingFail(true);
+        // 未配置服务器地址：显示 "-"，不视为超时
+        if (!cancelled) {
+          setLatency(null);
+          setPingFail(false);
+          setPingError(active?.server_address ? '无法解析服务器地址' : '未配置服务器地址');
+        }
         return;
       }
       try {
@@ -63,11 +70,13 @@ export function StatusPanel() {
         if (!cancelled) {
           setLatency(ms);
           setPingFail(false);
+          setPingError(null);
         }
-      } catch {
+      } catch (e) {
         if (!cancelled) {
           setLatency(null);
           setPingFail(true);
+          setPingError(String(e));
         }
       }
     };
@@ -115,7 +124,11 @@ export function StatusPanel() {
           <Descriptions.Item label="组网编号">
             {active?.token ? maskToken(active.token) : '-'}
           </Descriptions.Item>
-          <Descriptions.Item label="延时（ping 服务器）">
+          <Descriptions.Item
+            label={
+              <Tooltip title={pingError ?? '每 5 秒检测'}>延时（ping 服务器）</Tooltip>
+            }
+          >
             {latency != null ? `${latency}ms` : pingFail ? '超时' : '-'}
           </Descriptions.Item>
           <Descriptions.Item label="活动配置">{active?.name ?? '未选择'}</Descriptions.Item>
