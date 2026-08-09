@@ -15,7 +15,6 @@ import {
 } from 'antd';
 import { Moon, Sun, Upload, Download } from 'lucide-react';
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog';
-import { readTextFile, writeTextFile } from '@tauri-apps/plugin-fs';
 import {
   isRegistered,
   register,
@@ -25,7 +24,6 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { api } from '../lib/tauri';
 import { isDark, onThemeChange, setDark } from '../lib/theme';
 import { useConfigStore } from '../stores/configStore';
-import type { VntConfig } from '../lib/types';
 
 const ALERT_KEY = 'vnt-alert-threshold';
 
@@ -40,7 +38,7 @@ export function SettingsPanel() {
   const [vntVersion, setVntVersion] = useState('');
   // 初始状态加载完成前禁用交互，避免异步结果覆盖用户操作
   const [initializing, setInitializing] = useState(true);
-  const { configs, save } = useConfigStore();
+  const { save } = useConfigStore();
 
   // 加载初始状态
   useEffect(() => {
@@ -139,8 +137,9 @@ export function SettingsPanel() {
         filters: [{ name: 'JSON', extensions: ['json'] }],
       });
       if (!path) return;
-      await writeTextFile(path, JSON.stringify(configs, null, 2));
-      message.success('配置已导出');
+      // 后端直接写文件（不受 fs 插件路径 scope 限制）
+      await api.exportConfigs(path);
+      message.success(`配置已导出：${path}`);
     } catch (e) {
       message.error(`导出失败: ${String(e)}`);
     }
@@ -153,9 +152,12 @@ export function SettingsPanel() {
         filters: [{ name: 'JSON', extensions: ['json'] }],
       });
       if (!path || Array.isArray(path)) return;
-      const text = await readTextFile(path);
-      const imported = JSON.parse(text) as VntConfig[];
-      if (!Array.isArray(imported)) throw new Error('格式不正确');
+      // 后端读取解析（不受 fs 插件路径 scope 限制）
+      const imported = await api.importConfigs(path);
+      if (!imported.length) {
+        message.warning('文件中没有配置');
+        return;
+      }
       for (const cfg of imported) {
         await save({ ...cfg, id: '' }); // 重新生成 id，避免覆盖现有配置
       }

@@ -3,6 +3,7 @@
 use std::path::PathBuf;
 
 use parking_lot::{Mutex, RwLock};
+use tauri::menu::MenuItem;
 use tauri_plugin_shell::process::CommandChild;
 
 /// 连接状态（5 态状态机）
@@ -91,18 +92,33 @@ pub struct PeerInfo {
     pub status: String,
 }
 
+/// 托盘动态菜单项句柄（连接状态变化时更新文本/启用状态）
+#[derive(Clone)]
+pub struct TrayMenuItems {
+    /// 状态行（disabled，显示 状态/IP/组网编号）
+    pub status: MenuItem<tauri::Wry>,
+    /// 连接
+    pub connect: MenuItem<tauri::Wry>,
+    /// 断开
+    pub disconnect: MenuItem<tauri::Wry>,
+}
+
 /// 全局应用状态（通过 tauri::State 管理）
 pub struct AppState {
     /// 当前连接状态
     pub connection: RwLock<ConnectionStatus>,
     /// 当前活动配置 ID
     pub active_config_id: RwLock<Option<String>>,
+    /// 当前分配的虚拟 IP（连接成功后由输出解析写入）
+    pub virtual_ip: Mutex<Option<String>>,
     /// 日志环形缓冲区（最多 2000 行）
     pub log_buffer: crate::logger::LogBuffer,
     /// 流量统计快照
     pub traffic_snapshot: RwLock<TrafficSnapshot>,
     /// Sidecar 子进程句柄（必须持有，否则进程会被杀死）
     pub sidecar_child: RwLock<Option<CommandChild>>,
+    /// 托盘动态菜单项句柄（用于更新状态行/连接/断开）
+    pub tray_menu_items: Mutex<Option<TrayMenuItems>>,
     /// 配置存储路径
     pub config_dir: PathBuf,
     /// 当前应用句柄（用于 Rust → 前端 emit）
@@ -120,9 +136,11 @@ impl AppState {
         Self {
             connection: RwLock::new(ConnectionStatus::Stopped),
             active_config_id: RwLock::new(None),
+            virtual_ip: Mutex::new(None),
             log_buffer: crate::logger::LogBuffer::new(),
             traffic_snapshot: RwLock::new(TrafficSnapshot::default()),
             sidecar_child: RwLock::new(None),
+            tray_menu_items: Mutex::new(None),
             config_dir,
             app_handle: Mutex::new(None),
         }

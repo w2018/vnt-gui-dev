@@ -99,6 +99,12 @@ pub fn start_vnt(app: AppHandle, config: VntConfig) -> Result<(), String> {
     // 先清理可能残留的旧进程
     stop_vnt(app.clone())?;
 
+    // 清除上一轮连接的虚拟 IP
+    {
+        let state: State<'_, AppState> = app.state();
+        *state.virtual_ip.lock() = None;
+    }
+
     let args = build_args(&config);
     log::info!("启动 vnt-cli，参数: {:?}", args);
 
@@ -185,6 +191,10 @@ fn handle_output_line(app: &AppHandle, line: &str, is_stderr: bool) {
         // 注册成功，获取虚拟 IP
         if let Some(ip) = parse_virtual_ip(line) {
             log::info!("虚拟 IP 已分配: {}", ip);
+            {
+                let state: State<'_, AppState> = app.state();
+                *state.virtual_ip.lock() = Some(ip.clone());
+            }
             let _ = app.emit("virtual-ip-assigned", &ip);
         }
     } else if line.to_lowercase().contains("error")

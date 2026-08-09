@@ -90,6 +90,24 @@ async fn set_active_config(app: tauri::AppHandle, id: String) -> Result<(), Stri
     Ok(())
 }
 
+/// 导出全部配置到 JSON 文件（后端直接写文件，不受 fs 插件路径 scope 限制）
+#[tauri::command]
+fn export_configs(path: String) -> Result<(), String> {
+    let store = config::load_config_store();
+    let json = serde_json::to_string_pretty(&store).map_err(|e| format!("序列化失败: {}", e))?;
+    std::fs::write(&path, json).map_err(|e| format!("写入失败: {}", e))?;
+    Ok(())
+}
+
+/// 从 JSON 文件读取配置列表（由前端决定逐条保存，避免覆盖现有配置）
+#[tauri::command]
+fn import_configs(path: String) -> Result<Vec<VntConfig>, String> {
+    let content = std::fs::read_to_string(&path).map_err(|e| format!("读取失败: {}", e))?;
+    let store: ConfigStore =
+        serde_json::from_str(&content).map_err(|e| format!("解析失败: {}", e))?;
+    Ok(store.configs)
+}
+
 // ==================== 日志 ====================
 
 /// 获取历史日志
@@ -339,6 +357,8 @@ pub fn run() {
             save_config,
             delete_config,
             set_active_config,
+            export_configs,
+            import_configs,
             get_logs,
             clear_logs,
             export_logs,
