@@ -81,12 +81,6 @@ export function UpdateDialog() {
         {error && (
           <Alert type="error" showIcon message={error} style={{ marginBottom: 16 }} />
         )}
-        {!info && (
-          <Typography.Text type="secondary">
-            点击右上角「检查更新」：vnt-cli 对比上游 vnt-dev/vnt 最新 release，
-            GUI 对比本仓库 w2018/vnt-gui-dev 的 Releases。
-          </Typography.Text>
-        )}
       </Card>
 
       {/* vnt-cli 更新区 */}

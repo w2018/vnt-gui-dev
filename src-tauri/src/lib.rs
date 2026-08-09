@@ -15,6 +15,7 @@ use std::time::Duration;
 
 use tauri::{Manager, State};
 use tauri_plugin_autostart::ManagerExt;
+use tauri_plugin_notification::NotificationExt;
 
 use config::{ConfigStore, VntConfig};
 use settings::AppSettings;
@@ -314,6 +315,19 @@ pub fn run() {
     env_logger::init();
 
     tauri::Builder::default()
+        // 单实例：必须最先注册；重复启动时回调聚焦已有窗口（新进程自动退出）
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+            let _ = app
+                .notification()
+                .builder()
+                .title("VNT GUI")
+                .body("应用已在运行中，请勿重复启动")
+                .show();
+        }))
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,

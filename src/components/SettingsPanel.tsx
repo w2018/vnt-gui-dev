@@ -13,8 +13,9 @@ import {
   Typography,
   message,
 } from 'antd';
-import { Moon, Sun, Upload, Download } from 'lucide-react';
+import { Moon, Sun, Upload, Download, ExternalLink } from 'lucide-react';
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog';
+import { open } from '@tauri-apps/plugin-shell';
 import {
   isRegistered,
   register,
@@ -105,6 +106,15 @@ export function SettingsPanel() {
       .catch((e) => message.error(`保存设置失败: ${String(e)}`));
   }, [hideTrayAutostart, hideTrayBackground, initializing]);
 
+  // 组件卸载时注销全局快捷键，避免残留导致下次注册冲突（HotKey already registered）；兜底捕获防崩溃
+  useEffect(() => {
+    return () => {
+      void unregister('Ctrl+Shift+V').catch(() => {
+        /* 忽略卸载期注销失败 */
+      });
+    };
+  }, []);
+
   const handleAutostart = async (v: boolean) => {
     try {
       await api.setAutostart(v);
@@ -122,6 +132,14 @@ export function SettingsPanel() {
   const handleShortcut = async (v: boolean) => {
     try {
       if (v) {
+        // 幂等注册：若已注册（HotKey already registered 冲突）则先注销再注册
+        try {
+          if (await isRegistered('Ctrl+Shift+V')) {
+            await unregister('Ctrl+Shift+V');
+          }
+        } catch {
+          /* 查询/注销失败不阻断注册流程 */
+        }
         await register('Ctrl+Shift+V', () => {
           const win = getCurrentWindow();
           void win.isVisible().then((visible) => {
@@ -140,7 +158,8 @@ export function SettingsPanel() {
         message.success('快捷键已注销');
       }
     } catch (e) {
-      message.error(String(e));
+      // 兜底：注册/注销失败不崩溃，仅提示
+      message.error(`快捷键操作失败: ${String(e)}`);
     }
   };
 
@@ -343,16 +362,37 @@ export function SettingsPanel() {
 
       <Card title="关于" style={{ marginTop: 16 }}>
         <Row gutter={16}>
-          <Col span={12}>
+          <Col span={8}>
+            <Typography.Text type="secondary">作者</Typography.Text>
+            <div>
+              <Typography.Text strong>曾先生</Typography.Text>
+            </div>
+          </Col>
+          <Col span={8}>
             <Typography.Text type="secondary">VNT GUI 版本</Typography.Text>
             <div>
               <Typography.Text strong>{version || '-'}</Typography.Text>
             </div>
           </Col>
-          <Col span={12}>
+          <Col span={8}>
             <Typography.Text type="secondary">vnt-cli 版本</Typography.Text>
             <div>
               <Typography.Text strong>{vntVersion || '-'}</Typography.Text>
+            </div>
+          </Col>
+          <Col span={24} style={{ marginTop: 12 }}>
+            <Typography.Text type="secondary">开源地址</Typography.Text>
+            <div>
+              <Typography.Link
+                onClick={() => {
+                  void open('https://github.com/w2018/vnt-gui-dev').catch((e) =>
+                    message.error(`打开失败: ${String(e)}`),
+                  );
+                }}
+              >
+                <ExternalLink size={14} style={{ verticalAlign: '-2px', marginRight: 6 }} />
+                https://github.com/w2018/vnt-gui-dev
+              </Typography.Link>
             </div>
           </Col>
         </Row>
