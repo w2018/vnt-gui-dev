@@ -42,6 +42,7 @@ export const api = {
   getDeviceList: () => invoke<PeerInfo[]>('get_device_list'),
   getTrafficStats: () => invoke<TrafficSnapshot>('get_traffic_stats'),
   pingHost: (host: string) => invoke<number>('ping_host', { host }),
+  pingTest: (host: string) => invoke<string>('ping_test', { host }),
 };
 
 /** 初始化 Rust → 前端事件监听，返回取消函数列表 */

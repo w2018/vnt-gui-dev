@@ -113,49 +113,63 @@ fn import_configs(path: String) -> Result<Vec<VntConfig>, String> {
 
 // ==================== 网络检测 ====================
 
-/// Ping 主机（surge-ping 纯库实现：异步 ICMP，Windows 走系统 IcmpSendEcho 无需提权，
-/// 无子进程/无控制台窗口/无文本解析；失败或超时返回 Err）
+/// Ping 主机（surge-ping 0.9：异步 ICMP，Windows 走系统 IcmpSendEcho 无需提权；
+/// 域名走 tokio 异步 DNS；超时 2s 由 Pinger::timeout 内置控制）
 #[tauri::command]
 async fn ping_host(host: String) -> Result<u64, String> {
-    use std::net::IpAddr;
+    let ip = resolve_host(&host).await?;
+    let (ms, _size) = ping_impl(ip).await?;
+    Ok(ms)
+}
 
+/// 最小化 ping 测试命令：返回 "host => size bytes, time=xx.xxms" 格式
+#[tauri::command]
+async fn ping_test(host: String) -> Result<String, String> {
     let host = host.trim().to_string();
+    let ip = resolve_host(&host).await?;
+    let (ms, size) = ping_impl(ip).await?;
+    Ok(format!(
+        "{} => {} bytes, time={:.2}ms",
+        host,
+        size,
+        ms as f64
+    ))
+}
+
+/// 主机名 → IP（IP 直用，域名走 tokio 异步 DNS）
+async fn resolve_host(host: &str) -> Result<std::net::IpAddr, String> {
+    use std::net::IpAddr;
+    let host = host.trim();
     if host.is_empty() {
         return Err("主机地址为空".to_string());
     }
-
-    // 主机名 → IP（IP 直用，域名走 tokio 异步 DNS）
-    let ip: IpAddr = match host.parse() {
-        Ok(ip) => ip,
-        Err(_) => tokio::net::lookup_host((host.as_str(), 0))
+    match host.parse::<IpAddr>() {
+        Ok(ip) => Ok(ip),
+        Err(_) => tokio::net::lookup_host((host, 0))
             .await
             .map_err(|e| format!("DNS 解析失败: {}", e))?
             .next()
             .map(|addr| addr.ip())
-            .ok_or_else(|| "DNS 无解析结果".to_string())?,
-    };
-
-    ping_impl(ip).await
+            .ok_or_else(|| "DNS 无解析结果".to_string()),
+    }
 }
 
-/// 核心 ping 实现（可单测）
-async fn ping_impl(ip: std::net::IpAddr) -> Result<u64, String> {
+/// 核心 ping 实现（可单测）：返回 (毫秒, 发送字节数)
+async fn ping_impl(ip: std::net::IpAddr) -> Result<(u64, usize), String> {
     let client = surge_ping::Client::new(&surge_ping::Config::default())
         .map_err(|e| format!("ping 初始化失败: {}", e))?;
     let mut pinger = client
         .pinger(ip, surge_ping::PingIdentifier(0x1234))
         .await;
+    // 内置超时 2s（>= 排查清单建议值）
+    pinger.timeout(std::time::Duration::from_secs(2));
     let payload = [0u8; 16];
+    let size = payload.len();
 
-    match tokio::time::timeout(
-        std::time::Duration::from_millis(1500),
-        pinger.ping(surge_ping::PingSequence(0), &payload),
-    )
-    .await
-    {
-        Ok(Ok((_, rtt))) => Ok(rtt.as_millis() as u64),
-        Ok(Err(e)) => Err(format!("ping 失败: {}", e)),
-        Err(_) => Err("ping 超时".to_string()),
+    match pinger.ping(surge_ping::PingSequence(0), &payload).await {
+        Ok((_packet, rtt)) => Ok((rtt.as_millis() as u64, size)),
+        Err(surge_ping::SurgeError::Timeout { .. }) => Err("ping 超时".to_string()),
+        Err(e) => Err(format!("ping 失败: {}", e)),
     }
 }
 
@@ -165,15 +179,24 @@ mod ping_tests {
 
     #[tokio::test]
     async fn ping_loopback_succeeds() {
-        let ms = ping_impl("127.0.0.1".parse().unwrap()).await;
-        assert!(ms.is_ok(), "loopback ping 应成功，实际: {:?}", ms);
+        let r = ping_impl("127.0.0.1".parse().unwrap()).await;
+        assert!(r.is_ok(), "loopback ping 应成功，实际: {:?}", r);
     }
 
     #[tokio::test]
     async fn ping_unreachable_fails() {
-        // 192.0.2.0/24 为保留测试网段，必然不可达
+        // 192.0.2.0/24 为保留测试网段，必然不可达（2s 内置超时）
         let r = ping_impl("192.0.2.1".parse().unwrap()).await;
         assert!(r.is_err(), "不可达主机应返回 Err，实际: {:?}", r);
+    }
+
+    #[tokio::test]
+    async fn ping_domain_resolves_and_succeeds() {
+        // 域名解析 + 外网可达性（依赖本机网络）
+        let ip = super::resolve_host("www.baidu.com").await;
+        assert!(ip.is_ok(), "baidu.com 应可解析，实际: {:?}", ip);
+        let r = ping_impl(ip.unwrap()).await;
+        assert!(r.is_ok(), "baidu.com 应 ping 通，实际: {:?}", r);
     }
 }
 
@@ -473,6 +496,7 @@ pub fn run() {
             get_settings,
             save_settings,
             ping_host,
+            ping_test,
             get_logs,
             clear_logs,
             export_logs,

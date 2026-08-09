@@ -12,25 +12,24 @@ import type { PeerInfo } from '../lib/types';
 export function DeviceList() {
   const { devices, refresh } = useDeviceStore();
 
-  // 每 5 秒：刷新设备列表 + 顺序逐一 ping（错峰）；组件卸载时清除定时器
+  // 每 5 秒：刷新设备列表 + 并发 ping 每台设备；组件卸载时清除定时器
   useEffect(() => {
     let cancelled = false;
     const tick = async () => {
       await refresh();
       const list = useDeviceStore.getState().devices;
-      for (const dev of list) {
-        if (cancelled) return;
-        let ms: number;
-        try {
-          ms = await api.pingHost(dev.virtual_ip);
-        } catch {
-          // 离线/超时：标记 -1，不中断后续设备检测
-          useDeviceStore.getState().updateLatency(dev.virtual_ip, -1);
-          continue;
-        }
-        if (cancelled) return;
-        useDeviceStore.getState().updateLatency(dev.virtual_ip, ms);
-      }
+      // 并发 ping 所有设备（设备数有限，5s 一轮；单设备失败不影响其他）
+      await Promise.all(
+        list.map(async (dev) => {
+          try {
+            const ms = await api.pingHost(dev.virtual_ip);
+            if (!cancelled) useDeviceStore.getState().updateLatency(dev.virtual_ip, ms);
+          } catch {
+            // 离线/超时：标记 -1，不中断后续设备检测
+            if (!cancelled) useDeviceStore.getState().updateLatency(dev.virtual_ip, -1);
+          }
+        }),
+      );
     };
     void tick();
     const timer = window.setInterval(tick, PING_INTERVAL);
