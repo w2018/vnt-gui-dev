@@ -163,10 +163,12 @@ async fn check_app_update(
 /// 从 "version:1.2.16" 或 "v1.2.17" 中提取纯版本号 "1.2.16"
 fn extract_version(text: &str) -> Option<String> {
     let lower = text.to_lowercase();
-    let start = lower.find("version")?;
-    let after = &lower[start + "version".len()..];
-    // 跳过冒号/空格/v 前缀
-    let after = after.trim_start_matches(|c: char| c == ':' || c == ' ' || c == 'v');
+    // 优先找 "version" 关键字（--help 输出）；没有则从头解析（tag 形式 "v1.2.17"）
+    let start = lower
+        .find("version")
+        .map(|i| i + "version".len())
+        .unwrap_or(0);
+    let after = lower[start..].trim_start_matches(|c: char| c == ':' || c == ' ' || c == 'v');
     let end = after
         .find(|c: char| !c.is_ascii_digit() && c != '.')
         .unwrap_or(after.len());
@@ -176,6 +178,52 @@ fn extract_version(text: &str) -> Option<String> {
         Some(ver.to_string())
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extract_version_parses_help_output() {
+        assert_eq!(
+            extract_version("vnt-cli 1.2.16\nversion:1.2.16"),
+            Some("1.2.16".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_version_parses_tag() {
+        assert_eq!(extract_version("v1.2.17"), Some("1.2.17".to_string()));
+        assert_eq!(extract_version("1.2.17"), Some("1.2.17".to_string()));
+    }
+
+    #[test]
+    fn extract_version_handles_suffix() {
+        assert_eq!(
+            extract_version("version:1.2.16 (beta)"),
+            Some("1.2.16".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_version_rejects_garbage() {
+        assert_eq!(extract_version("no version here"), None);
+        assert_eq!(extract_version("version:abc"), None);
+        assert_eq!(extract_version(""), None);
+    }
+
+    #[test]
+    fn version_comparison_correct_direction() {
+        // GUI 1.0.0 与 vnt-cli 1.2.16 不应混淆：vnt-cli 更新检测对比的是 vnt 版本
+        let latest = semver::Version::parse("1.2.17").unwrap();
+        let local = semver::Version::parse("1.2.16").unwrap();
+        assert!(latest > local);
+
+        let latest = semver::Version::parse("1.0.0").unwrap();
+        let local = semver::Version::parse("1.0.0").unwrap();
+        assert!(!(latest > local));
     }
 }
 

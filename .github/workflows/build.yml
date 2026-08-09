@@ -28,16 +28,17 @@ jobs:
         shell: pwsh
         run: |
           $release = Invoke-RestMethod -Uri "https://api.github.com/repos/vnt-dev/vnt/releases/latest" -Headers @{ "User-Agent" = "vnt-gui-ci" }
-          $asset = $release.assets | Where-Object { $_.name -like "*x86_64-pc-windows-msvc.zip" } | Select-Object -First 1
-          if (-not $asset) { throw "未找到 vnt-cli x86_64 资产" }
-          Write-Host "下载 vnt-cli $($release.tag_name): $($asset.name)"
-          Invoke-WebRequest -Uri $asset.browser_download_url -OutFile "src-tauri/binaries/vnt-cli.zip"
-          Expand-Archive -Path "src-tauri/binaries/vnt-cli.zip" -DestinationPath "src-tauri/binaries/extract" -Force
+          $asset = $release.assets | Where-Object { $_.name -like "*x86_64-pc-windows-msvc*" -and $_.name -like "*.tar.gz" } | Select-Object -First 1
+          if (-not $asset) { throw "未找到 vnt x86_64 资产" }
+          Write-Host "下载 vnt $($release.tag_name): $($asset.name)"
+          Invoke-WebRequest -Uri $asset.browser_download_url -OutFile "src-tauri/binaries/vnt-cli.tar.gz"
+          New-Item -ItemType Directory -Path "src-tauri/binaries/extract" -Force | Out-Null
+          tar -xzf "src-tauri/binaries/vnt-cli.tar.gz" -C "src-tauri/binaries/extract"
           $exe = Get-ChildItem "src-tauri/binaries/extract" -Recurse -Filter "*.exe" | Where-Object { $_.Name -like "vnt-cli*" } | Select-Object -First 1
           if (-not $exe) { throw "解压后未找到 vnt-cli.exe" }
           Copy-Item $exe.FullName "src-tauri/binaries/vnt-cli-x86_64-pc-windows-msvc.exe" -Force
           Remove-Item "src-tauri/binaries/extract" -Recurse -Force
-          Remove-Item "src-tauri/binaries/vnt-cli.zip" -Force
+          Remove-Item "src-tauri/binaries/vnt-cli.tar.gz" -Force
 
       - name: Download wintun.dll
         shell: pwsh
