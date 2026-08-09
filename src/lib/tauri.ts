@@ -3,15 +3,14 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { useConnectionStore } from '../stores/connectionStore';
-import { useDeviceStore } from '../stores/deviceStore';
 import { useLogStore } from '../stores/logStore';
 import { useTrafficStore } from '../stores/trafficStore';
 import type {
   AppSettings,
   ConfigStore,
   ConnectionStatus,
+  DeviceListResult,
   LogEntry,
-  PeerInfo,
   TrafficSnapshot,
   UpdateInfo,
   VntConfig,
@@ -39,7 +38,7 @@ export const api = {
   isAutostartEnabled: () => invoke<boolean>('is_autostart_enabled'),
   getAppVersion: () => invoke<string>('get_app_version'),
   getVntVersion: () => invoke<string>('get_vnt_version'),
-  getDeviceList: () => invoke<PeerInfo[]>('get_device_list'),
+  getDeviceList: () => invoke<DeviceListResult>('get_device_list'),
   getTrafficStats: () => invoke<TrafficSnapshot>('get_traffic_stats'),
   pingHost: (host: string) => invoke<number>('ping_host', { host }),
   pingTest: (host: string) => invoke<string>('ping_test', { host }),
@@ -91,13 +90,6 @@ export async function initTauriListeners(): Promise<UnlistenFn[]> {
   unlisteners.push(
     await listen<TrafficSnapshot>('traffic-update', (event) => {
       useTrafficStore.getState().updateTraffic(event.payload);
-    }),
-  );
-
-  // 设备列表
-  unlisteners.push(
-    await listen<PeerInfo[]>('device-list-update', (event) => {
-      useDeviceStore.getState().setDevices(event.payload);
     }),
   );
 

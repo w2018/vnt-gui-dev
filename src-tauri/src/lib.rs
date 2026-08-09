@@ -379,8 +379,9 @@ async fn get_vnt_version(app: tauri::AppHandle) -> Result<String, String> {
 }
 
 /// 获取在线设备列表（后台运行 vnt 时执行 `--list` 解析，尽力而为）
+/// 返回：过滤本机后的设备列表 + 本机设备信息（本机虚拟 IP 来自 register 日志解析）
 #[tauri::command]
-async fn get_device_list(app: tauri::AppHandle) -> Result<Vec<state::PeerInfo>, String> {
+async fn get_device_list(app: tauri::AppHandle) -> Result<state::DeviceListResult, String> {
     use tauri_plugin_shell::ShellExt;
     let output = app
         .shell()
@@ -394,26 +395,38 @@ async fn get_device_list(app: tauri::AppHandle) -> Result<Vec<state::PeerInfo>, 
     let stderr = String::from_utf8_lossy(&output.stderr);
     let text = if !stdout.trim().is_empty() { &stdout } else { &stderr };
 
-    // 尝试 JSON 解析
-    if let Ok(peers) = serde_json::from_str::<Vec<state::PeerInfo>>(text) {
-        return Ok(peers);
-    }
+    // 先尝试 JSON 解析，失败则按文本行解析（真实格式见 parse_list_line）
+    let peers = if let Ok(peers) = serde_json::from_str::<Vec<state::PeerInfo>>(text) {
+        peers
+    } else {
+        let mut peers = Vec::new();
+        for line in text.lines() {
+            if let Some(peer) = parse_list_line(line) {
+                peers.push(peer);
+            }
+        }
+        peers
+    };
 
-    // 尽力解析文本行（vnt-cli --list 真实格式）：
-    //   Name        Virtual Ip    Status     P2P/Relay    Rt
-    //   Z           10.26.0.2     Offline
-    //   RNA-AL00    10.26.0.3     Offline
-    let mut peers = Vec::new();
-    for line in text.lines() {
-        let line = line.trim();
-        if line.is_empty() || line.to_lowercase().starts_with("name") {
-            continue;
+    // 本机识别：register ip= 日志解析出的本机虚拟 IP
+    let local_ip = {
+        let state: tauri::State<'_, AppState> = app.state();
+        let guard = state.virtual_ip.lock();
+        guard.clone()
+    };
+
+    let mut devices = Vec::with_capacity(peers.len());
+    let mut local = None;
+    for peer in peers {
+        if let Some(ip) = &local_ip {
+            if &peer.virtual_ip == ip {
+                local = Some(peer);
+                continue;
+            }
         }
-        if let Some(peer) = parse_list_line(line) {
-            peers.push(peer);
-        }
+        devices.push(peer);
     }
-    Ok(peers)
+    Ok(state::DeviceListResult { devices, local })
 }
 
 /// 解析 vnt-cli --list 单行输出（真实格式："Z 10.26.0.2 Offline"）

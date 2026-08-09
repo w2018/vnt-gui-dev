@@ -92,6 +92,15 @@ pub struct PeerInfo {
     pub status: String,
 }
 
+/// 设备列表查询结果：过滤本机后的设备 + 本机信息（用于连接信息展示）
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct DeviceListResult {
+    /// 过滤本机后的设备列表
+    pub devices: Vec<PeerInfo>,
+    /// 本机在组网中的设备信息（识别不到时为 None）
+    pub local: Option<PeerInfo>,
+}
+
 /// 托盘动态菜单项句柄（连接状态变化时更新文本/启用状态）
 #[derive(Clone)]
 pub struct TrayMenuItems {

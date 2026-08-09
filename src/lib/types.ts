@@ -67,6 +67,12 @@ export interface PeerInfo {
   status: 'online' | 'offline';
 }
 
+/** 设备列表查询结果（过滤本机 + 本机信息） */
+export interface DeviceListResult {
+  devices: PeerInfo[];
+  local: PeerInfo | null;
+}
+
 /** 应用行为设置（托盘可见性等） */
 export interface AppSettings {
   hide_tray_on_autostart: boolean;

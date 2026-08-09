@@ -7,6 +7,7 @@ import { PING_INTERVAL } from '../lib/constants';
 import { latencyColor } from '../lib/latency';
 import { useConnectionStore } from '../stores/connectionStore';
 import { useConfigStore } from '../stores/configStore';
+import { useDeviceStore } from '../stores/deviceStore';
 
 const statusMap: Record<string, { color: string; text: string }> = {
   stopped: { color: 'default', text: '未连接' },
@@ -30,6 +31,7 @@ export function StatusPanel() {
   const [pingError, setPingError] = useState<string | null>(null);
 
   const active = configs.find((c) => c.id === activeConfigId);
+  const localPeer = useDeviceStore((s) => s.localPeer);
   const running = status === 'connected' || status === 'starting' || status === 'reconnecting';
   const st = statusMap[status] ?? statusMap.stopped;
 
@@ -104,6 +106,9 @@ export function StatusPanel() {
         )}
 
         <Descriptions column={1} size="small" bordered>
+          <Descriptions.Item label="设备名">
+            {localPeer?.name ?? active?.device_name ?? '-'}
+          </Descriptions.Item>
           <Descriptions.Item label="虚拟 IP">{virtualIp ?? '未分配'}</Descriptions.Item>
           <Descriptions.Item label="服务器">
             {serverAddress ?? active?.server_address ?? '默认官方服务器'}
