@@ -271,10 +271,10 @@ export function SettingsPanel() {
           <Divider style={{ margin: '4px 0' }} />
           <Row align="middle" justify="space-between">
             <Col>
-              <Typography.Text strong>后台运行时隐藏托盘</Typography.Text>
+              <Typography.Text strong>隐藏托盘</Typography.Text>
               <div>
                 <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                  关闭窗口进入后台时隐藏托盘图标（无托盘入口，需再次启动或快捷键唤出）
+                  隐藏/显示托盘图标，切换立即生效（后台运行时按此开关控制）
                 </Typography.Text>
               </div>
             </Col>
@@ -282,7 +282,13 @@ export function SettingsPanel() {
               <Switch
                 checked={hideTrayBackground}
                 disabled={initializing}
-                onChange={setHideTrayBackground}
+                onChange={(v) => {
+                  setHideTrayBackground(v);
+                  // 实时隐藏/显示托盘图标（不受后台事件触发限制）
+                  void api.setTrayVisible(!v).catch(() => {
+                    /* 忽略：托盘操作失败不影响设置保存 */
+                  });
+                }}
               />
             </Col>
           </Row>

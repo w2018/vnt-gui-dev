@@ -31,6 +31,7 @@ export const api = {
   importConfigs: (path: string) => invoke<VntConfig[]>('import_configs', { path }),
   getSettings: () => invoke<AppSettings>('get_settings'),
   saveSettings: (settings: AppSettings) => invoke<void>('save_settings', { settings }),
+  setTrayVisible: (visible: boolean) => invoke<void>('set_tray_visible', { visible }),
   getLogs: () => invoke<LogEntry[]>('get_logs'),
   clearLogs: () => invoke<void>('clear_logs'),
   exportLogs: (path: string) => invoke<void>('export_logs', { path }),

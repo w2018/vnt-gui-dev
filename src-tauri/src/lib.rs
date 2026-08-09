@@ -321,6 +321,19 @@ fn save_settings(settings: AppSettings) -> Result<(), String> {
     settings::save_settings(&settings)
 }
 
+/// 实时显示/隐藏系统托盘图标（设置开关即时生效）
+#[tauri::command]
+fn set_tray_visible(app: tauri::AppHandle, visible: bool) -> Result<(), String> {
+    if let Some(tray) = app.tray_by_id(crate::tray::TRAY_ID) {
+        tray.set_visible(visible)
+            .map_err(|e| format!("设置托盘可见性失败: {}", e))?;
+        log::info!("托盘图标已{}", if visible { "显示" } else { "隐藏" });
+        Ok(())
+    } else {
+        Err("托盘未创建".to_string())
+    }
+}
+
 // ==================== 日志 ====================
 
 /// 获取历史日志
@@ -795,6 +808,7 @@ pub fn run() {
             import_configs,
             get_settings,
             save_settings,
+            set_tray_visible,
             ping_host,
             ping_test,
             get_ping_host,
