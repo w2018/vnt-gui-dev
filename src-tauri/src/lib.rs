@@ -230,10 +230,11 @@ async fn ping_impl(ip: std::net::IpAddr) -> Result<(u64, usize), String> {
 
 #[cfg(test)]
 mod ping_tests {
+    use super::extract_host;
     use super::parse_info;
     use super::parse_list_line;
     use super::parse_nat_type;
-    use super::parse_relay_server;
+    use super::parse_relay_addr;
     use super::ping_impl;
 
     #[test]
@@ -274,9 +275,12 @@ mod ping_tests {
     #[test]
     fn info_extras_parse() {
         let text = "Name: Z\nVirtual ip: 10.26.0.3\nNAT type: Cone\nRelay server: 8.134.66.150:29872";
-        assert_eq!(parse_relay_server(text).as_deref(), Some("8.134.66.150"));
+        // 完整地址（IP:端口，展示用）
+        assert_eq!(parse_relay_addr(text).as_deref(), Some("8.134.66.150:29872"));
+        // 从完整地址提取纯 host（ping 用，互不影响）
+        assert_eq!(extract_host(&parse_relay_addr(text).unwrap()).as_deref(), Some("8.134.66.150"));
         assert_eq!(parse_nat_type(text).as_deref(), Some("Cone"));
-        assert_eq!(parse_relay_server("no relay here"), None);
+        assert_eq!(parse_relay_addr("no relay here"), None);
         assert_eq!(parse_nat_type("NAT type:"), None);
     }
 
@@ -448,10 +452,13 @@ async fn get_device_list(app: tauri::AppHandle) -> Result<state::DeviceListResul
         let (n, i) = parse_info(text);
         local_name = n;
         local_ip = i;
-        // 真实连接服务器（Relay server: 8.134.66.150:29872）→ 未配置地址时 ping 目标
-        if let Some(host) = parse_relay_server(text) {
+        // 真实连接服务器（Relay server: 8.134.66.150:29872）→ 完整地址展示 + 纯 host ping
+        if let Some(addr) = parse_relay_addr(text) {
             let state: tauri::State<'_, AppState> = app.state();
-            *state.server_host.lock() = Some(host);
+            *state.relay_addr.lock() = Some(addr.clone());
+            if let Some(host) = extract_host(&addr) {
+                *state.server_host.lock() = Some(host);
+            }
         }
         // NAT 类型（NAT type: Cone）
         if let Some(nat) = parse_nat_type(text) {
@@ -545,13 +552,15 @@ fn parse_info(text: &str) -> (Option<String>, Option<String>) {
     (name, ip)
 }
 
-/// 解析 --info 的 Relay server 行（"Relay server: 8.134.66.150:29872"）→ 纯 host
-fn parse_relay_server(text: &str) -> Option<String> {
+/// 解析 --info 的 Relay server 行（"Relay server: 8.134.66.150:29872"）→ 完整地址
+fn parse_relay_addr(text: &str) -> Option<String> {
     for line in text.lines() {
         let line = line.trim();
         if line.to_lowercase().starts_with("relay server:") {
             let addr = line["relay server:".len()..].trim();
-            return extract_host(addr);
+            if !addr.is_empty() {
+                return Some(addr.to_string());
+            }
         }
     }
     None
@@ -571,7 +580,7 @@ fn parse_nat_type(text: &str) -> Option<String> {
     None
 }
 
-/// 本机增强信息（连接信息展示用）：NAT 类型 + 真实连接服务器
+/// 本机增强信息（连接信息展示用）：NAT 类型 + 真实连接服务器（完整地址 IP:端口）
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct LocalInfo {
     pub nat_type: Option<String>,
@@ -579,14 +588,15 @@ pub struct LocalInfo {
 }
 
 /// 获取本机 NAT 类型与真实连接服务器（来自 --info 解析，连接后有效）
+/// relay_server = 完整地址 "IP:端口"（展示用）；ping 目标仍走 get_ping_host（纯 host，互不影响）
 #[tauri::command]
 fn get_local_info(app: tauri::AppHandle) -> LocalInfo {
     let state: State<'_, AppState> = app.state();
     let nat_guard = state.nat_type.lock();
     let nat_type = nat_guard.clone();
     drop(nat_guard);
-    let host_guard = state.server_host.lock();
-    let relay_server = host_guard.clone();
+    let addr_guard = state.relay_addr.lock();
+    let relay_server = addr_guard.clone();
     LocalInfo {
         nat_type,
         relay_server,
@@ -676,6 +686,14 @@ async fn get_traffic_stats(app: tauri::AppHandle) -> Result<TrafficSnapshot, Str
     let state: State<'_, AppState> = app.state();
     let snap = state.traffic_snapshot.read().clone();
     Ok(snap)
+}
+
+/// 获取分时间段流量统计（今日/昨日/本月/累计）
+#[tauri::command]
+async fn get_traffic_period(app: tauri::AppHandle) -> Result<crate::traffic::PeriodTraffic, String> {
+    let state: State<'_, AppState> = app.state();
+    let daily = state.traffic_daily.lock();
+    Ok(daily.period())
 }
 
 // ==================== 应用入口 ====================
@@ -792,7 +810,18 @@ pub fn run() {
             get_vnt_version,
             get_device_list,
             get_traffic_stats,
+            get_traffic_period,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app_handle, event| {
+            if let tauri::RunEvent::Exit = event {
+                // 退出前保存按天流量统计（含最后 60 秒内的增量）
+                let state: State<'_, AppState> = app_handle.state();
+                let dir = state.config_dir.clone();
+                let daily = state.traffic_daily.lock().clone();
+                daily.save(&dir);
+                log::info!("退出：已保存流量统计");
+            }
+        });
 }

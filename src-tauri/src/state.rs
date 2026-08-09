@@ -122,6 +122,8 @@ pub struct AppState {
     pub virtual_ip: Mutex<Option<String>>,
     /// 日志提取的实际连接服务器 host（如 "8.134.66.150"，用于未配置地址时 ping）
     pub server_host: Mutex<Option<String>>,
+    /// 真实连接服务器完整地址（"8.134.66.150:29872"，连接信息展示用）
+    pub relay_addr: Mutex<Option<String>>,
     /// 本机 NAT 类型（--info 解析，如 "Cone"）
     pub nat_type: Mutex<Option<String>>,
     /// sidecar 启停互斥锁（防止 autostart 自动连接与手动连接并发导致双进程）
@@ -130,6 +132,8 @@ pub struct AppState {
     pub log_buffer: crate::logger::LogBuffer,
     /// 流量统计快照
     pub traffic_snapshot: RwLock<TrafficSnapshot>,
+    /// 按天累计流量统计（今日/昨日/本月/累计，持久化）
+    pub traffic_daily: Mutex<crate::traffic::TrafficStats>,
     /// Sidecar 子进程句柄（必须持有，否则进程会被杀死）
     pub sidecar_child: RwLock<Option<CommandChild>>,
     /// 托盘动态菜单项句柄（用于更新状态行/连接/断开）
@@ -153,10 +157,12 @@ impl AppState {
             active_config_id: RwLock::new(None),
             virtual_ip: Mutex::new(None),
             server_host: Mutex::new(None),
+            relay_addr: Mutex::new(None),
             nat_type: Mutex::new(None),
             process_lock: Mutex::new(()),
             log_buffer: crate::logger::LogBuffer::new(),
             traffic_snapshot: RwLock::new(TrafficSnapshot::default()),
+            traffic_daily: Mutex::new(crate::traffic::TrafficStats::default()),
             sidecar_child: RwLock::new(None),
             tray_menu_items: Mutex::new(None),
             config_dir,

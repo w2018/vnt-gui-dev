@@ -79,6 +79,20 @@ export interface LocalInfo {
   relay_server: string | null;
 }
 
+/** 单日流量（字节） */
+export interface DayTraffic {
+  sent: number;
+  recv: number;
+}
+
+/** 分时间段流量汇总（今日/昨日/本月/累计） */
+export interface PeriodTraffic {
+  today: DayTraffic;
+  yesterday: DayTraffic;
+  month: DayTraffic;
+  total: DayTraffic;
+}
+
 /** 应用行为设置（托盘可见性等） */
 export interface AppSettings {
   hide_tray_on_autostart: boolean;

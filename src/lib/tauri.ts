@@ -12,6 +12,7 @@ import type {
   DeviceListResult,
   LocalInfo,
   LogEntry,
+  PeriodTraffic,
   TrafficSnapshot,
   UpdateInfo,
   VntConfig,
@@ -45,6 +46,7 @@ export const api = {
   pingTest: (host: string) => invoke<string>('ping_test', { host }),
   getPingHost: () => invoke<string | null>('get_ping_host'),
   getLocalInfo: () => invoke<LocalInfo>('get_local_info'),
+  getTrafficPeriod: () => invoke<PeriodTraffic>('get_traffic_period'),
 };
 
 /** 初始化 Rust → 前端事件监听，返回取消函数列表 */
