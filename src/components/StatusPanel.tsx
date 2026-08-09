@@ -32,8 +32,7 @@ function parseHost(server?: string): string | null {
 }
 
 function maskToken(token: string): string {
-  if (token.length <= 6) return '*'.repeat(token.length);
-  return `${token.slice(0, 3)}${'*'.repeat(token.length - 6)}${token.slice(-3)}`;
+  return token;
 }
 
 export function StatusPanel() {

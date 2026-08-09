@@ -113,67 +113,68 @@ fn import_configs(path: String) -> Result<Vec<VntConfig>, String> {
 
 // ==================== 网络检测 ====================
 
-/// Ping 主机（Windows: ping.exe 子进程，解析延迟毫秒；失败/超时返回 Err）
+/// Ping 主机（surge-ping 纯库实现：异步 ICMP，Windows 走系统 IcmpSendEcho 无需提权，
+/// 无子进程/无控制台窗口/无文本解析；失败或超时返回 Err）
 #[tauri::command]
-fn ping_host(host: String) -> Result<u64, String> {
-    let host = host.trim();
+async fn ping_host(host: String) -> Result<u64, String> {
+    use std::net::IpAddr;
+
+    let host = host.trim().to_string();
     if host.is_empty() {
         return Err("主机地址为空".to_string());
     }
-    #[cfg(windows)]
+
+    // 主机名 → IP（IP 直用，域名走 tokio 异步 DNS）
+    let ip: IpAddr = match host.parse() {
+        Ok(ip) => ip,
+        Err(_) => tokio::net::lookup_host((host.as_str(), 0))
+            .await
+            .map_err(|e| format!("DNS 解析失败: {}", e))?
+            .next()
+            .map(|addr| addr.ip())
+            .ok_or_else(|| "DNS 无解析结果".to_string())?,
+    };
+
+    ping_impl(ip).await
+}
+
+/// 核心 ping 实现（可单测）
+async fn ping_impl(ip: std::net::IpAddr) -> Result<u64, String> {
+    let client = surge_ping::Client::new(&surge_ping::Config::default())
+        .map_err(|e| format!("ping 初始化失败: {}", e))?;
+    let mut pinger = client
+        .pinger(ip, surge_ping::PingIdentifier(0x1234))
+        .await;
+    let payload = [0u8; 16];
+
+    match tokio::time::timeout(
+        std::time::Duration::from_millis(1500),
+        pinger.ping(surge_ping::PingSequence(0), &payload),
+    )
+    .await
     {
-        let output = std::process::Command::new("ping")
-            .args(["-n", "1", "-w", "1500", host])
-            .output()
-            .map_err(|e| format!("ping 执行失败: {}", e))?;
-        if !output.status.success() {
-            return Err("ping 失败（主机不可达）".to_string());
-        }
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        for line in stdout.lines() {
-            // 兼容中英文输出："时间=12ms" / "time=12ms" / "时间<1ms" / "time<1ms"
-            let lower = line.to_lowercase();
-            if lower.contains("time=") || lower.contains("time<") {
-                if let Some(ms) = parse_ping_ms(&lower) {
-                    return Ok(ms);
-                }
-            }
-        }
-        Err("无法解析 ping 结果".to_string())
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = host;
-        Err("当前平台不支持 ping".to_string())
+        Ok(Ok((_, rtt))) => Ok(rtt.as_millis() as u64),
+        Ok(Err(e)) => Err(format!("ping 失败: {}", e)),
+        Err(_) => Err("ping 超时".to_string()),
     }
 }
 
-/// 从 "time=12ms" / "time<1ms" 行提取毫秒数
-#[cfg(windows)]
-fn parse_ping_ms(lower_line: &str) -> Option<u64> {
-    let bytes = lower_line.as_bytes();
-    let mut i = 0;
-    while i + 1 < bytes.len() {
-        if bytes[i] == b'm' && (bytes[i + 1] == b's' || bytes[i + 1] == b'S') {
-            // 回溯数字（允许 '='、'<'、空格分隔）
-            let mut j = i;
-            while j > 0 && (bytes[j - 1] == b' ' || bytes[j - 1] == b'\t') {
-                j -= 1;
-            }
-            let end = j;
-            while j > 0 && bytes[j - 1].is_ascii_digit() {
-                j -= 1;
-            }
-            if j < end {
-                if let Ok(ms) = lower_line[j..end].parse::<u64>() {
-                    return Some(ms);
-                }
-            }
-            return None;
-        }
-        i += 1;
+#[cfg(test)]
+mod ping_tests {
+    use super::ping_impl;
+
+    #[tokio::test]
+    async fn ping_loopback_succeeds() {
+        let ms = ping_impl("127.0.0.1".parse().unwrap()).await;
+        assert!(ms.is_ok(), "loopback ping 应成功，实际: {:?}", ms);
     }
-    None
+
+    #[tokio::test]
+    async fn ping_unreachable_fails() {
+        // 192.0.2.0/24 为保留测试网段，必然不可达
+        let r = ping_impl("192.0.2.1".parse().unwrap()).await;
+        assert!(r.is_err(), "不可达主机应返回 Err，实际: {:?}", r);
+    }
 }
 
 // ==================== 应用设置 ====================

@@ -15,6 +15,8 @@ import {
 } from 'antd';
 import { Pencil, Plus, Trash2 } from 'lucide-react';
 import { useConfigStore } from '../stores/configStore';
+import { useConnectionStore } from '../stores/connectionStore';
+import { api } from '../lib/tauri';
 import { defaultConfig, type VntConfig } from '../lib/types';
 
 export function ConfigHistory({ onEdit }: { onEdit: (c: VntConfig) => void }) {
@@ -27,7 +29,15 @@ export function ConfigHistory({ onEdit }: { onEdit: (c: VntConfig) => void }) {
   const handleActivate = async (id: string) => {
     try {
       await setActive(id);
-      message.success('已切换活动配置');
+      // 若正在连接，按新配置重新连接
+      const st = useConnectionStore.getState().status;
+      if (st === 'connected' || st === 'starting' || st === 'reconnecting') {
+        await api.stopConnection();
+        await api.startConnection(id);
+        message.success('已切换配置并按新配置重新连接');
+      } else {
+        message.success('已切换活动配置');
+      }
     } catch (e) {
       message.error(`切换失败: ${String(e)}`);
     }
@@ -125,6 +135,5 @@ export function ConfigHistory({ onEdit }: { onEdit: (c: VntConfig) => void }) {
 }
 
 function maskToken(token: string): string {
-  if (token.length <= 6) return '*'.repeat(token.length);
-  return `${token.slice(0, 3)}${'*'.repeat(token.length - 6)}${token.slice(-3)}`;
+  return token;
 }

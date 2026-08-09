@@ -219,7 +219,7 @@ pub fn update_tray_status(app: &AppHandle, status: &ConnectionStatus) {
     // 2. tooltip（2a：编号始终可见）
     let token_short = load_config_store()
         .get_active()
-        .map(|c| mask_token(&c.token))
+        .map(|c| c.token.clone())
         .unwrap_or_else(|| "-".to_string());
     let tooltip = match status {
         ConnectionStatus::Connected => format!("VNT GUI - 已连接  编号:{}", token_short),
@@ -264,16 +264,4 @@ pub fn update_tray_status(app: &AppHandle, status: &ConnectionStatus) {
         ConnectionStatus::Stopped => format!("未连接  编号:{}", token_short),
     };
     let _ = items.status.set_text(text);
-}
-
-/// 组网编号脱敏（如 abc***xyz）
-fn mask_token(token: &str) -> String {
-    if token.len() <= 6 {
-        "*".repeat(token.chars().count())
-    } else {
-        let chars: Vec<char> = token.chars().collect();
-        let head: String = chars[..3].iter().collect();
-        let tail: String = chars[chars.len() - 3..].iter().collect();
-        format!("{}***{}", head, tail)
-    }
 }
