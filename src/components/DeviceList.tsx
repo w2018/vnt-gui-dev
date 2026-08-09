@@ -7,6 +7,7 @@ import type { ColumnsType } from 'antd/es/table';
 import { useDeviceStore } from '../stores/deviceStore';
 import { api } from '../lib/tauri';
 import { PING_INTERVAL } from '../lib/constants';
+import { latencyColor } from '../lib/latency';
 import type { PeerInfo } from '../lib/types';
 
 export function DeviceList() {
@@ -67,7 +68,13 @@ export function DeviceList() {
       title: '延时',
       dataIndex: 'latency',
       key: 'latency',
-      render: (ms: number) => (ms > 0 ? `${ms}ms` : ms === 0 ? '--' : '超时'),
+      render: (ms: number) => (
+        <Typography.Text
+          style={{ color: latencyColor(ms), fontWeight: 600 }}
+        >
+          {ms > 0 ? `${ms}ms` : ms === 0 ? '--' : '超时'}
+        </Typography.Text>
+      ),
     },
     {
       title: '状态',

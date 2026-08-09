@@ -111,6 +111,8 @@ pub struct AppState {
     pub active_config_id: RwLock<Option<String>>,
     /// 当前分配的虚拟 IP（连接成功后由输出解析写入）
     pub virtual_ip: Mutex<Option<String>>,
+    /// 日志提取的实际连接服务器 host（如 "8.134.66.150"，用于未配置地址时 ping）
+    pub server_host: Mutex<Option<String>>,
     /// 日志环形缓冲区（最多 2000 行）
     pub log_buffer: crate::logger::LogBuffer,
     /// 流量统计快照
@@ -137,6 +139,7 @@ impl AppState {
             connection: RwLock::new(ConnectionStatus::Stopped),
             active_config_id: RwLock::new(None),
             virtual_ip: Mutex::new(None),
+            server_host: Mutex::new(None),
             log_buffer: crate::logger::LogBuffer::new(),
             traffic_snapshot: RwLock::new(TrafficSnapshot::default()),
             sidecar_child: RwLock::new(None),

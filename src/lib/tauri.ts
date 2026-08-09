@@ -43,6 +43,7 @@ export const api = {
   getTrafficStats: () => invoke<TrafficSnapshot>('get_traffic_stats'),
   pingHost: (host: string) => invoke<number>('ping_host', { host }),
   pingTest: (host: string) => invoke<string>('ping_test', { host }),
+  getPingHost: () => invoke<string | null>('get_ping_host'),
 };
 
 /** 初始化 Rust → 前端事件监听，返回取消函数列表 */

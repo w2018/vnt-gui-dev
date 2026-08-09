@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { Button, Card, Descriptions, Space, Tag, Tooltip, Typography, message } from 'antd';
 import { api } from '../lib/tauri';
 import { PING_INTERVAL } from '../lib/constants';
+import { latencyColor } from '../lib/latency';
 import { useConnectionStore } from '../stores/connectionStore';
 import { useConfigStore } from '../stores/configStore';
 
@@ -14,22 +15,6 @@ const statusMap: Record<string, { color: string; text: string }> = {
   reconnecting: { color: 'warning', text: '重连中...' },
   error: { color: 'error', text: '错误' },
 };
-
-/** 从服务器地址提取主机名（去协议前缀与端口） */
-function parseHost(server?: string): string | null {
-  if (!server) return null;
-  let s = server.trim();
-  const scheme = s.indexOf('://');
-  if (scheme >= 0) s = s.slice(scheme + 3);
-  const colon = s.lastIndexOf(':');
-  if (colon > 0) {
-    const portPart = s.slice(colon + 1);
-    if (portPart.length > 0 && [...portPart].every((c) => c >= '0' && c <= '9')) {
-      s = s.slice(0, colon);
-    }
-  }
-  return s || null;
-}
 
 function maskToken(token: string): string {
   return token;
@@ -48,20 +33,22 @@ export function StatusPanel() {
   const running = status === 'connected' || status === 'starting' || status === 'reconnecting';
   const st = statusMap[status] ?? statusMap.stopped;
 
-  // 延时 = ping 服务器（每 5 秒），组件卸载时清除定时器
+  // 延时 = ping 服务器（每 5 秒）：ping 目标 = 配置地址或日志提取的实际服务器；组件卸载时清除定时器
   useEffect(() => {
     let cancelled = false;
     const tick = async () => {
-      const active = useConfigStore
-        .getState()
-        .configs.find((c) => c.id === useConfigStore.getState().activeConfigId);
-      const host = parseHost(active?.server_address);
+      let host: string | null = null;
+      try {
+        host = await api.getPingHost();
+      } catch {
+        /* 忽略 */
+      }
       if (!host) {
-        // 未配置服务器地址：显示 "-"，不视为超时
+        // 无任何可 ping 目标（未配置且未连接过）：显示 "-"
         if (!cancelled) {
           setLatency(null);
           setPingFail(false);
-          setPingError(active?.server_address ? '无法解析服务器地址' : '未配置服务器地址');
+          setPingError('未配置服务器地址且未从日志获取到连接服务器');
         }
         return;
       }
@@ -129,7 +116,14 @@ export function StatusPanel() {
               <Tooltip title={pingError ?? '每 5 秒检测'}>延时（ping 服务器）</Tooltip>
             }
           >
-            {latency != null ? `${latency}ms` : pingFail ? '超时' : '-'}
+            <Typography.Text
+              style={{
+                color: latencyColor(latency != null ? latency : pingFail ? -1 : null),
+                fontWeight: 600,
+              }}
+            >
+              {latency != null ? `${latency}ms` : pingFail ? '超时' : '-'}
+            </Typography.Text>
           </Descriptions.Item>
           <Descriptions.Item label="活动配置">{active?.name ?? '未选择'}</Descriptions.Item>
         </Descriptions>

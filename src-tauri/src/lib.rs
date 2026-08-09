@@ -113,6 +113,43 @@ fn import_configs(path: String) -> Result<Vec<VntConfig>, String> {
 
 // ==================== 网络检测 ====================
 
+/// 获取 ping 目标 host：优先活动配置的服务器地址，其次 vnt-cli 日志提取的实际连接服务器
+#[tauri::command]
+fn get_ping_host(app: tauri::AppHandle) -> Option<String> {
+    // 1. 活动配置 server_address（去协议前缀/端口）
+    if let Some(cfg) = config::load_config_store().get_active() {
+        if let Some(server) = &cfg.server_address {
+            if let Some(host) = extract_host(server) {
+                return Some(host);
+            }
+        }
+    }
+    // 2. 日志提取的实际连接服务器（如 "8.134.66.150"）
+    let state: State<'_, AppState> = app.state();
+    let host = state.server_host.lock().clone();
+    host
+}
+
+/// 从服务器地址提取纯 host（去 "tcp://" 前缀与端口；IPv6 不做端口剥离）
+fn extract_host(server: &str) -> Option<String> {
+    let mut s = server.trim();
+    if let Some(i) = s.find("://") {
+        s = &s[i + 3..];
+    }
+    // 去端口：仅当最后一个冒号后全为数字
+    if let Some(i) = s.rfind(':') {
+        let port = &s[i + 1..];
+        if !port.is_empty() && port.chars().all(|c| c.is_ascii_digit()) {
+            s = &s[..i];
+        }
+    }
+    if s.is_empty() {
+        None
+    } else {
+        Some(s.to_string())
+    }
+}
+
 /// Ping 主机（surge-ping 0.9：异步 ICMP，Windows 走系统 IcmpSendEcho 无需提权；
 /// 域名走 tokio 异步 DNS；超时 2s 由 Pinger::timeout 内置控制）
 #[tauri::command]
@@ -515,6 +552,7 @@ pub fn run() {
             save_settings,
             ping_host,
             ping_test,
+            get_ping_host,
             get_logs,
             clear_logs,
             export_logs,

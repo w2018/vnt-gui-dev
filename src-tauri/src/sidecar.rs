@@ -210,6 +210,48 @@ fn handle_output_line(app: &AppHandle, line: &str, is_stderr: bool) {
     if let Some(ms) = extract_latency(line) {
         let _ = app.emit("latency-update", ms);
     }
+
+    // 解析实际连接服务器地址（如 "connect count=1 ,address=8.134.66.150:29872"）
+    // 未配置服务器地址时，用它作为 ping 目标
+    if let Some(host) = extract_server_host(line) {
+        let state: State<'_, AppState> = app.state();
+        *state.server_host.lock() = Some(host.clone());
+        log::info!("已记录连接服务器: {}", host);
+    }
+}
+
+/// 从输出行提取服务器 host（匹配 "address=8.134.66.150:29872" 或 "address = 8.134.66.150"）
+fn extract_server_host(line: &str) -> Option<String> {
+    let lower = line.to_lowercase();
+    let idx = lower.find("address")?;
+    let rest = &lower[idx + "address".len()..];
+    // 跳过 "="、"："、空格
+    let rest = rest.trim_start_matches(|c: char| c == '=' || c == ':' || c == ' ' || c == '\t');
+    // 取到分隔符（逗号/空格/制表符）为止
+    let end = rest
+        .find(|c: char| c == ',' || c == ' ' || c == '\t')
+        .unwrap_or(rest.len());
+    let addr = &rest[..end];
+    if addr.is_empty() {
+        return None;
+    }
+    // 去端口（保留 IP/域名部分）
+    let host = match addr.rfind(':') {
+        Some(i) => {
+            let port = &addr[i + 1..];
+            if !port.is_empty() && port.chars().all(|c| c.is_ascii_digit()) {
+                &addr[..i]
+            } else {
+                addr
+            }
+        }
+        None => addr,
+    };
+    if host.is_empty() {
+        None
+    } else {
+        Some(host.to_string())
+    }
 }
 
 /// 进程终止处理：指数退避重连（文档 §3.3.3）
@@ -384,6 +426,21 @@ mod tests {
         assert_eq!(extract_latency("handshake with server success"), None);
         assert_eq!(extract_latency(""), None);
         assert_eq!(extract_latency("register ip=10.26.0.3 ,netmask=255.255.255.0"), None);
+    }
+
+    #[test]
+    fn server_host_parses_connect_log() {
+        // 用户日志格式：connect count=1 ,address=8.134.66.150:29872
+        assert_eq!(
+            extract_server_host("connect count=1 ,address=8.134.66.150:29872"),
+            Some("8.134.66.150".to_string())
+        );
+        assert_eq!(
+            extract_server_host("address = vnt.example.com:29871"),
+            Some("vnt.example.com".to_string())
+        );
+        assert_eq!(extract_server_host("register ip=10.26.0.3"), None);
+        assert_eq!(extract_server_host(""), None);
     }
 
     #[test]
