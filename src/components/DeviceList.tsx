@@ -13,20 +13,25 @@ import type { PeerInfo } from '../lib/types';
 export function DeviceList() {
   const { devices, refresh } = useDeviceStore();
 
-  // 每 5 秒：刷新设备列表 + 并发 ping 每台设备；组件卸载时清除定时器
+  // 每 5 秒：刷新设备列表 + 并发 ping 在线设备；离线设备不 ping（显示离线）；组件卸载时清除定时器
   useEffect(() => {
     let cancelled = false;
     const tick = async () => {
       await refresh();
       const list = useDeviceStore.getState().devices;
-      // 并发 ping 所有设备（设备数有限，5s 一轮；单设备失败不影响其他）
+      // 并发 ping 所有在线设备（设备数有限，5s 一轮；单设备失败不影响其他）
       await Promise.all(
         list.map(async (dev) => {
+          if (dev.status !== 'online') {
+            // 离线设备：不检测，延时显示 "--"
+            if (!cancelled) useDeviceStore.getState().updateLatency(dev.virtual_ip, 0);
+            return;
+          }
           try {
             const ms = await api.pingHost(dev.virtual_ip);
             if (!cancelled) useDeviceStore.getState().updateLatency(dev.virtual_ip, ms);
           } catch {
-            // 离线/超时：标记 -1，不中断后续设备检测
+            // 在线但 ping 超时：标记 -1，不中断后续设备检测
             if (!cancelled) useDeviceStore.getState().updateLatency(dev.virtual_ip, -1);
           }
         }),
@@ -68,13 +73,14 @@ export function DeviceList() {
       title: '延时',
       dataIndex: 'latency',
       key: 'latency',
-      render: (ms: number) => (
-        <Typography.Text
-          style={{ color: latencyColor(ms), fontWeight: 600 }}
-        >
-          {ms > 0 ? `${ms}ms` : ms === 0 ? '--' : '超时'}
-        </Typography.Text>
-      ),
+      render: (ms: number, record: PeerInfo) =>
+        record.status === 'offline' ? (
+          <Tag>离线</Tag>
+        ) : (
+          <Typography.Text style={{ color: latencyColor(ms), fontWeight: 600 }}>
+            {ms > 0 ? `${ms}ms` : ms === 0 ? '--' : '超时'}
+          </Typography.Text>
+        ),
     },
     {
       title: '状态',

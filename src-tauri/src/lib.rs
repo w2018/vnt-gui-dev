@@ -230,7 +230,29 @@ async fn ping_impl(ip: std::net::IpAddr) -> Result<(u64, usize), String> {
 
 #[cfg(test)]
 mod ping_tests {
+    use super::parse_list_line;
     use super::ping_impl;
+
+    #[test]
+    fn list_line_parses_real_output() {
+        // 本机实测 vnt-cli --list 输出
+        let table_header = "Name        Virtual Ip    Status     P2P/Relay    Rt";
+        assert!(parse_list_line(table_header).is_none());
+        let offline = parse_list_line("Z           10.26.0.2     Offline").unwrap();
+        assert_eq!(offline.name, "Z");
+        assert_eq!(offline.virtual_ip, "10.26.0.2");
+        assert_eq!(offline.status, "offline");
+        let offline2 = parse_list_line("RNA-AL00    10.26.0.3     Offline").unwrap();
+        assert_eq!(offline2.name, "RNA-AL00");
+        assert_eq!(offline2.virtual_ip, "10.26.0.3");
+        assert_eq!(offline2.status, "offline");
+        // 在线行（模拟）
+        let online = parse_list_line("Phone   10.26.0.9    Online    P2P   12ms").unwrap();
+        assert_eq!(online.status, "online");
+        assert_eq!(online.latency, 12);
+        assert_eq!(online.connection_type, "p2p");
+        assert!(parse_list_line("").is_none());
+    }
 
     #[tokio::test]
     async fn ping_loopback_succeeds() {
@@ -377,34 +399,53 @@ async fn get_device_list(app: tauri::AppHandle) -> Result<Vec<state::PeerInfo>, 
         return Ok(peers);
     }
 
-    // 尽力解析文本行：提取 IP 与名称
+    // 尽力解析文本行（vnt-cli --list 真实格式）：
+    //   Name        Virtual Ip    Status     P2P/Relay    Rt
+    //   Z           10.26.0.2     Offline
+    //   RNA-AL00    10.26.0.3     Offline
     let mut peers = Vec::new();
     for line in text.lines() {
         let line = line.trim();
-        if line.is_empty() || line.starts_with("name") {
+        if line.is_empty() || line.to_lowercase().starts_with("name") {
             continue;
         }
-        if let Some(ip) = extract_ip(line) {
-            let name = line
-                .split_whitespace()
-                .next()
-                .unwrap_or("未知设备")
-                .trim_matches('|')
-                .to_string();
-            peers.push(state::PeerInfo {
-                name,
-                virtual_ip: ip,
-                connection_type: if line.to_lowercase().contains("relay") {
-                    "relay".to_string()
-                } else {
-                    "p2p".to_string()
-                },
-                latency: extract_latency(line),
-                status: "online".to_string(),
-            });
+        if let Some(peer) = parse_list_line(line) {
+            peers.push(peer);
         }
     }
     Ok(peers)
+}
+
+/// 解析 vnt-cli --list 单行输出（真实格式："Z 10.26.0.2 Offline"）
+fn parse_list_line(line: &str) -> Option<state::PeerInfo> {
+    let line = line.trim();
+    if line.is_empty() || line.to_lowercase().starts_with("name") {
+        return None;
+    }
+    let ip = extract_ip(line)?;
+    let name = line
+        .split_whitespace()
+        .next()
+        .unwrap_or("未知设备")
+        .trim_matches('|')
+        .to_string();
+    // 状态列：Offline 设备不参与 ping（前端显示离线）
+    let status = if line.contains("Offline") {
+        "offline"
+    } else {
+        "online"
+    };
+    Some(state::PeerInfo {
+        name,
+        virtual_ip: ip,
+        connection_type: if line.to_lowercase().contains("relay") {
+            "relay".to_string()
+        } else {
+            "p2p".to_string()
+        },
+        latency: extract_latency(line),
+        status: status.to_string(),
+    })
 }
 
 /// 从文本中提取 IPv4 地址
