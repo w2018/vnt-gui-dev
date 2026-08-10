@@ -1,6 +1,6 @@
 [package]
 name = "vnt-gui"
-version = "2.1.2"
+version = "2.2.0"
 description = "VNT 虚拟局域网图形化管理工具"
 authors = ["vnt-gui"]
 edition = "2021"
@@ -54,6 +54,11 @@ tokio-util = "0.7"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-log = "0.2"
+iroh-net = { version = "0.17", default-features = false }
+bincode = "1"
+arboard = "3"
+enigo = "0.6.1"
+windows-capture = "2.0.1"
 
 # Daemon 独立可执行文件（服务解耦）
 [[bin]]
@@ -66,7 +71,21 @@ windows-sys = { version = "0.59", features = [
     "Win32_NetworkManagement_IpHelper",
     "Win32_NetworkManagement_Ndis",
     "Win32_System_Threading",
+    "Win32_UI_WindowsAndMessaging",
+] }
+# Media Foundation H.264 编码器（零 ffmpeg 依赖）+ windows-capture 依赖同版本 windows 0.62
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Media_MediaFoundation",
+    "Win32_System_Com",
+    "Win32_System_Ole",
+    "Win32_System_Variant",
 ] }
 
 [dev-dependencies]
 suppaftp = { version = "10", features = ["tokio"] }
+
+# iroh-net 0.17.0 上游在 rustc 1.96 下因 iroh-quinn::Accept 缺 Debug 编译失败，
+# 本地 vendor patch 修复（仅补 Accept 的 Debug impl，其余源码未改动）
+[patch.crates-io]
+iroh-net = { path = "vendor/iroh-net" }

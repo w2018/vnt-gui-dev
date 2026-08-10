@@ -1,6 +1,6 @@
 # VNT GUI
 
-[vnt-dev/vnt](https://github.com/vnt-dev/vnt) 的 Windows 图形化管理工具（Rust + Tauri 2 + React）。当前版本 **v2.1.2**。
+[vnt-dev/vnt](https://github.com/vnt-dev/vnt) 的 Windows 图形化管理工具（Rust + Tauri 2 + React）。当前版本 **v2.2.0**。
 
 将官方 `vnt-cli.exe` 作为 Sidecar 嵌入。**GUI 与后台服务（vnt-daemon）解耦**：daemon 常驻管理 vnt-cli 与 FTP，关闭/重启 GUI 不影响已建立的组网与 FTP 服务；GUI 通过本地 RPC 控制 daemon，重新打开自动恢复服务。
 
@@ -14,6 +14,7 @@
 - **实时日志**：GUI 与 daemon 日志合并实时展示（v2.1.0 起 daemon 日志经 RPC 合并）、过滤/搜索/导出/清空
 - **流量统计**：实时速率折线图、今日/昨日/本月/累计流量（按天持久化）、速率告警
 - **设备列表**：本组网设备（自动过滤本机）、P2P/中继标识、延迟着色、离线识别
+- **桌面共享（v2.2.0 新增）**：控制端/被控端双模——Media Foundation H.264 硬件编码 + WebCodecs 硬解（零 ffmpeg 依赖）、鼠标/键盘/剪贴板/特殊键远程控制、被控端连接授权（可限权限/仅查看）、codec 自动降级（Main→High→Baseline）与解码失败自动重试、全局错误边界兜底（不再白屏）
 - **FTP 服务**：内嵌 FTP 服务器（libunftp）、用户权限管理（上传/下载/删除/只读）、ROOT 目录选择、端口与 PASV 配置、监听地址展示、**连接日志（登录与操作均显示真实客户端 IP，v2.1.0 修复）**、随应用/系统自启（密码经 Windows DPAPI 加密存储）
 - **软件更新**：vnt-cli 与 GUI 双通道版本检测 + 一键更新
 - **体验**：首次启动向导、深浅主题、全局快捷键、开机自启隐藏窗口

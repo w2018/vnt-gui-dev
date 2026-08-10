@@ -3,6 +3,7 @@
 mod autostart;
 pub mod config;
 pub mod daemon;
+pub mod desktop_share;
 pub mod ftp;
 mod logger;
 mod settings;
@@ -1009,6 +1010,20 @@ pub fn run(autostart: bool) {
             ftp::ftp_pick_root_dir,
             ftp::ftp_get_logs,
             ftp::ftp_get_listen_addresses,
+            desktop_share::desktop_init,
+            desktop_share::desktop_get_local_info,
+            desktop_share::desktop_get_session,
+            desktop_share::desktop_connect,
+            desktop_share::desktop_accept_request,
+            desktop_share::desktop_reject_request,
+            desktop_share::desktop_disconnect,
+            desktop_share::desktop_start_sharing,
+            desktop_share::desktop_stop_sharing,
+            desktop_share::desktop_set_video_channel,
+            desktop_share::desktop_send_input,
+            desktop_share::desktop_get_config,
+            desktop_share::desktop_save_config,
+            desktop_share::desktop_check_encoder,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

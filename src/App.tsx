@@ -1,6 +1,6 @@
 // 应用主布局：侧边栏 + 主内容区（文档 §4.1）
 
-import { useEffect, useState } from 'react';
+import { Component, useEffect, useState, type ReactNode } from 'react';
 import { Layout, Menu, Typography, message } from 'antd';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { sendNotification } from '@tauri-apps/plugin-notification';
@@ -9,6 +9,7 @@ import {
   Database,
   FileText,
   Home,
+  Monitor,
   PlugZap,
   RefreshCw,
   Server,
@@ -26,19 +27,30 @@ import { UpdateDialog } from './components/UpdateDialog';
 import { FirstRunWizard } from './components/FirstRunWizard';
 import { SettingsPanel } from './components/SettingsPanel';
 import { FtpService } from './pages/FtpService';
+import { DesktopShare } from './pages/DesktopShare';
 import { useConfigStore } from './stores/configStore';
 import { useConnectionStore } from './stores/connectionStore';
 import { useTrafficStore } from './stores/trafficStore';
 import { api } from './lib/tauri';
 import type { VntConfig } from './lib/types';
 
-type PageKey = 'home' | 'connect' | 'config' | 'ftp' | 'traffic' | 'log' | 'settings' | 'update';
+type PageKey =
+  | 'home'
+  | 'connect'
+  | 'config'
+  | 'ftp'
+  | 'desktop'
+  | 'traffic'
+  | 'log'
+  | 'settings'
+  | 'update';
 
 const menuItems = [
   { key: 'home', icon: <Home size={16} />, label: '首页' },
   { key: 'connect', icon: <PlugZap size={16} />, label: '连接' },
   { key: 'config', icon: <Database size={16} />, label: '配置' },
   { key: 'ftp', icon: <Server size={16} />, label: 'FTP 服务' },
+  { key: 'desktop', icon: <Monitor size={16} />, label: '桌面共享' },
   { key: 'traffic', icon: <Activity size={16} />, label: '流量' },
   { key: 'log', icon: <FileText size={16} />, label: '日志' },
   { key: 'settings', icon: <Settings size={16} />, label: '设置' },
@@ -47,6 +59,28 @@ const menuItems = [
 
 // 流量告警节流（每分钟最多通知一次）
 let lastAlertAt = 0;
+
+// 全局错误边界：任何渲染异常显示可见错误，避免整树卸载白屏
+class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
+  state: { error: Error | null } = { error: null };
+
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+
+  render() {
+    if (this.state.error) {
+      return (
+        <div style={{ padding: 24, color: '#ff4d4f', fontFamily: 'monospace' }}>
+          <h3>界面渲染错误</h3>
+          <pre style={{ whiteSpace: 'pre-wrap' }}>{String(this.state.error)}</pre>
+          <button onClick={() => this.setState({ error: null })}>重试</button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 export default function App() {
   const [page, setPage] = useState<PageKey>('home');
@@ -131,7 +165,8 @@ export default function App() {
   }, []);
 
   return (
-    <Layout style={{ minHeight: '100vh' }}>
+    <ErrorBoundary>
+      <Layout style={{ minHeight: '100vh' }}>
       <Layout.Sider theme="light" width={200}>
         <div style={{ padding: '16px', textAlign: 'center' }}>
           <Typography.Title level={4} style={{ margin: 0 }}>
@@ -162,11 +197,13 @@ export default function App() {
         )}
         {page === 'traffic' && <TrafficChart />}
         {page === 'ftp' && <FtpService />}
+        {page === 'desktop' && <DesktopShare />}
         {page === 'log' && <LogViewer />}
         {page === 'settings' && <SettingsPanel />}
         {page === 'update' && <UpdateDialog />}
         <FirstRunWizard />
       </Layout.Content>
-    </Layout>
+      </Layout>
+    </ErrorBoundary>
   );
 }
