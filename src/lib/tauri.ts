@@ -106,7 +106,7 @@ export async function initTauriListeners(): Promise<UnlistenFn[]> {
     }),
   );
 
-  // 日志
+  // 日志（桌面共享模块日志已在后端按来源过滤，不推送；VNT/FTP 等保留实时）
   unlisteners.push(
     await listen<LogEntry>('log-line', (event) => {
       useLogStore.getState().appendLog(event.payload);

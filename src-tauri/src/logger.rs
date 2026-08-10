@@ -76,7 +76,7 @@ pub struct AppLogger {
     file: Mutex<Option<File>>,
 }
 
-/// 前端事件推送句柄（setup 后注入）
+/// 前端事件推送句柄（setup 后注入；emit log-line 实时日志）
 static APP_HANDLE: OnceLock<AppHandle> = OnceLock::new();
 
 /// 初始化：设置全局 logger（只能调用一次）；file_path 为日志文件路径
@@ -93,13 +93,13 @@ pub fn init(file_path: std::path::PathBuf) {
     log::set_max_level(log::LevelFilter::Info);
 }
 
-/// setup 阶段注入 AppHandle（用于 emit log-line）
+/// setup 阶段注入 AppHandle（用于 emit log-line 实时日志）
 pub fn attach(app: AppHandle) {
     let _ = APP_HANDLE.set(app);
 }
 
 impl AppLogger {
-    fn write_entry(&self, entry: &LogEntry) {
+    fn write_entry(&self, entry: &LogEntry, is_desktop: bool) {
         // 1. 内存缓冲（日志页历史）
         global_buffer().push(entry.clone());
         // 2. 落盘
@@ -117,9 +117,11 @@ impl AppLogger {
                 entry.message
             );
         }
-        // 3. 前端实时事件
-        if let Some(app) = APP_HANDLE.get() {
-            let _ = app.emit("log-line", entry);
+        // 3. 前端实时事件（桌面共享模块日志跳过，降低 GUI 负载；VNT/FTP 等保留）
+        if !is_desktop {
+            if let Some(app) = APP_HANDLE.get() {
+                let _ = app.emit("log-line", entry);
+            }
         }
     }
 }
@@ -136,12 +138,21 @@ impl log::Log for AppLogger {
             log::Level::Debug => LogLevel::Debug,
             log::Level::Info | log::Level::Trace => LogLevel::Info,
         };
+        let module = record.module_path().unwrap_or("");
+        let is_desktop = module.contains("desktop_share");
+        // iroh-net 内部高频日志（端口映射 upnp/actor/rtt 等）
+        let is_iroh_noise = module.contains("iroh_net") || module.contains("portmapper");
+        // 桌面共享 / iroh-net 内部只记录失败/告警，INFO/DEBUG 直接丢弃，减少日志量与 GUI 负载
+        if (is_desktop || is_iroh_noise) && matches!(level, LogLevel::Info | LogLevel::Debug) {
+            return;
+        }
         let entry = LogEntry {
             timestamp: chrono::Utc::now().to_rfc3339(),
             level,
             message: record.args().to_string(),
         };
-        self.write_entry(&entry);
+        // 桌面共享日志不实时推送（仅缓冲+落盘）；VNT/FTP 等保留实时
+        self.write_entry(&entry, is_desktop);
     }
 
     fn flush(&self) {

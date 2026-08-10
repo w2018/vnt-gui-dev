@@ -41,6 +41,39 @@ export function RemoteCanvas() {
   // 会话状态：disconnected → sharing 等变化时重建解码器（二次连接/重连黑屏防御）
   const sessionType = useDesktopStore((s) => s.session.state.type);
 
+  // 渲染合并：output 只保留最新帧，rAF 统一绘制（跳过中间帧，避免渲染积压延迟）
+  const pendingFrameRef = useRef<VideoFrame | null>(null);
+  const renderScheduledRef = useRef(false);
+
+  // 调度一次渲染：绘制最新解码帧
+  const scheduleRender = () => {
+    if (renderScheduledRef.current) return;
+    renderScheduledRef.current = true;
+    requestAnimationFrame(() => {
+      renderScheduledRef.current = false;
+      const frame = pendingFrameRef.current;
+      pendingFrameRef.current = null;
+      if (!frame) return;
+      const canvas = canvasRef.current;
+      const ctx = canvas?.getContext('2d');
+      if (!canvas || !ctx) {
+        frame.close();
+        return;
+      }
+      const dw = frame.displayWidth;
+      const dh = frame.displayHeight;
+      const last = drawnSizeRef.current;
+      if (!last || last.width !== dw || last.height !== dh) {
+        canvas.width = dw;
+        canvas.height = dh;
+        drawnSizeRef.current = { width: dw, height: dh };
+        setRemoteSize({ width: dw, height: dh });
+      }
+      ctx.drawImage(frame, 0, 0, dw, dh);
+      frame.close();
+    });
+  };
+
   // 创建/重建解码器（attempt 变化时重建；codec × 加速策略组合自动重试）
   useEffect(() => {
     if (!('VideoDecoder' in window)) {
@@ -62,27 +95,12 @@ export function RemoteCanvas() {
     try {
       dec = new VideoDecoder({
         output: (frame: VideoFrame) => {
-          const canvas = canvasRef.current;
-          if (!canvas) {
-            frame.close();
-            return;
+          // 只保留最新帧绘制（跳过中间帧，画面始终跟随最新解码帧，降低渲染积压延迟）
+          if (pendingFrameRef.current) {
+            pendingFrameRef.current.close();
           }
-          const ctx = canvas.getContext('2d');
-          if (!ctx) {
-            frame.close();
-            return;
-          }
-          const dw = frame.displayWidth;
-          const dh = frame.displayHeight;
-          const last = drawnSizeRef.current;
-          if (!last || last.width !== dw || last.height !== dh) {
-            canvas.width = dw;
-            canvas.height = dh;
-            drawnSizeRef.current = { width: dw, height: dh };
-            setRemoteSize({ width: dw, height: dh });
-          }
-          ctx.drawImage(frame, 0, 0, dw, dh);
-          frame.close();
+          pendingFrameRef.current = frame;
+          scheduleRender();
         },
         error: (e) => {
           console.error(`VideoDecoder error (codec=${codec}, accel=${accel}):`, e);
@@ -110,6 +128,12 @@ export function RemoteCanvas() {
     gotKeyframeRef.current = false;
 
     return () => {
+      // 清理未绘制的帧与渲染调度
+      if (pendingFrameRef.current) {
+        pendingFrameRef.current.close();
+        pendingFrameRef.current = null;
+      }
+      renderScheduledRef.current = false;
       // error 后 decoder 已自动进入 closed 状态，close() 会抛 InvalidStateError → 必须先判状态
       try {
         if (dec && dec.state !== 'closed') {
@@ -137,6 +161,10 @@ export function RemoteCanvas() {
           return;
         }
         gotKeyframeRef.current = true;
+      }
+      // 背压：解码队列积压（解码/渲染跟不上）→ 跳过 delta 帧，宁可掉帧保持实时，避免画面延迟累积
+      if (d.decodeQueueSize > 2 && !payload.header.is_keyframe) {
+        return;
       }
       try {
         const bytes =

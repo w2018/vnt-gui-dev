@@ -23,7 +23,10 @@ async fn main() {
         // EnvFilter 作为独立过滤层 + 文件层 + 内存缓冲层（GUI 经 RPC 拉取实时日志）
         let filter =
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+                .unwrap_or_else(|_| {
+                    // 关闭 iroh-net 内部高频日志（upnp/actor/rtt 端口映射探测等），保留其他 info
+                    tracing_subscriber::EnvFilter::new("info,iroh_net=warn")
+                });
         let file_layer = tracing_subscriber::fmt::layer().with_writer(file);
         let _ = tracing_subscriber::registry()
             .with(filter)

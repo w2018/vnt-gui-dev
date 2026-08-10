@@ -833,7 +833,7 @@ pub fn run(autostart: bool) {
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .setup(move |app| {
-            // 日志器注入 AppHandle（emit log-line 事件）
+            // 日志器注入 AppHandle（emit log-line 实时日志；桌面共享日志已按来源过滤）
             crate::logger::attach(app.handle().clone());
             // 旧版数据迁移（%APPDATA%\vnt-gui → data\；安装目录根残留 → data\ + logs\）
             config::migrate_legacy_data();

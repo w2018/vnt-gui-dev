@@ -15,7 +15,7 @@ use crate::desktop_share::mf_encoder::MfH264Encoder;
 use crate::desktop_share::protocol::{ScreenInfo, VideoFrameHeader};
 
 /// 捕获配置
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct CaptureConfig {
     /// 显示器索引（0 = 主显示器）
     pub monitor: usize,
@@ -205,6 +205,8 @@ fn capture_loop(
                 Ok(None) => {}
                 Err(e) => {
                     log::warn!("编码失败: {}", e);
+                    // 编码失败（如低内存环境 E_OUTOFMEMORY）→ 短暂休眠限速，避免无限刷日志与 CPU 空转
+                    std::thread::sleep(std::time::Duration::from_millis(200));
                 }
             }
         }

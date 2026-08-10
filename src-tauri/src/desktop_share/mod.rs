@@ -325,6 +325,14 @@ pub async fn desktop_save_config(app: AppHandle, cfg: DesktopShareConfig) -> Res
         .ok_or_else(|| "桌面共享未初始化，请确认 VNT 已连接后重试".to_string())?;
     config::save(&state.config_dir, &cfg).map_err(|e| e.to_string())?;
     *state.config.lock().await = cfg;
+    // 共享运行中：一次性重启采集，使新配置（fps/码率/分辨率/画质）立即生效
+    // （不做每帧读配置，避免采集热路径开销）
+    if state.capture_task.lock().await.is_some() {
+        stop_capture(state.inner()).await;
+        if let Err(e) = start_capture(state.inner()).await {
+            log::error!("应用新采集配置失败: {}", e);
+        }
+    }
     Ok(())
 }
 

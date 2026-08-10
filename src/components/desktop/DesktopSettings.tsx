@@ -1,9 +1,31 @@
 // 桌面共享设置—— 桌面共享页"设置"标签页内容（标签页本身已收纳，直接展开显示全部设置项）
 
-import { Col, InputNumber, Row, Slider, Space, Switch, Typography, message } from 'antd';
+import { Button, Col, InputNumber, Row, Slider, Space, Switch, Typography, message } from 'antd';
 import { useDesktopStore } from '../../stores/useDesktopStore';
 
 const { Text } = Typography;
+
+// 采集预设档位（被控端生效；保存后采集线程立即重建编码器）
+const CAPTURE_PRESETS = [
+  {
+    key: 'smooth',
+    label: '流畅',
+    desc: '720p / 10fps / 0.8Mbps（低内存推荐）',
+    capture: { fps: 10, bitrate_kbps: 800, width: 1280, height: 720, quality: 30 },
+  },
+  {
+    key: 'balanced',
+    label: '均衡',
+    desc: '1080p / 30fps / 2Mbps',
+    capture: { fps: 30, bitrate_kbps: 2000, width: 1920, height: 1080, quality: 23 },
+  },
+  {
+    key: 'hd',
+    label: '高清',
+    desc: '1080p / 30fps / 6Mbps',
+    capture: { fps: 30, bitrate_kbps: 6000, width: 1920, height: 1080, quality: 15 },
+  },
+] as const;
 
 export function DesktopSettings() {
   const { config, saveConfig, loadConfig, encoderAvailable } = useDesktopStore();
@@ -17,6 +39,20 @@ export function DesktopSettings() {
       message.error(String(e)),
     );
   };
+
+  // 当前配置是否匹配某预设
+  const isActivePreset = (c: {
+    fps: number;
+    bitrate_kbps: number;
+    width: number;
+    height: number;
+    quality: number;
+  }) =>
+    config.capture.fps === c.fps &&
+    config.capture.bitrate_kbps === c.bitrate_kbps &&
+    config.capture.width === c.width &&
+    config.capture.height === c.height &&
+    config.capture.quality === c.quality;
 
   return (
     <Row gutter={[24, 20]}>
@@ -33,6 +69,30 @@ export function DesktopSettings() {
         <div style={{ marginTop: 4 }}>
           <Text type="secondary">关闭后其他设备无法请求连接你的桌面</Text>
         </div>
+      </Col>
+
+      <Col span={24}>
+        <Space direction="vertical" size="small" style={{ width: '100%' }}>
+          <Text strong>采集预设（被控端生效，一键应用）</Text>
+          <Space wrap>
+            {CAPTURE_PRESETS.map((p) => (
+              <Button
+                key={p.key}
+                type={isActivePreset(p.capture) ? 'primary' : 'default'}
+                onClick={() =>
+                  saveConfig({ capture: { ...config.capture, ...p.capture } })
+                    .then(() => message.success(`已应用「${p.label}」预设（${p.desc}）`))
+                    .catch((e) => message.error(String(e)))
+                }
+              >
+                {p.label} · {p.desc}
+              </Button>
+            ))}
+          </Space>
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            共享运行中修改也会立即生效；虚拟机/低内存环境建议「流畅」档
+          </Text>
+        </Space>
       </Col>
 
       <Col xs={24} md={12}>

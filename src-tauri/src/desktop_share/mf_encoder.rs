@@ -153,7 +153,9 @@ impl MfH264Encoder {
             width,
             height,
             fps,
-            max_out_size: (width * height * 4) as usize,
+            // H.264 码流远小于原始帧：输出 buffer 用 NV12 大小（1920×1080 ≈ 4MB）即可，
+            // 减小内存峰值（低内存虚拟机避免 E_OUTOFMEMORY）
+            max_out_size: (width * height * 2) as usize,
             sps_pps: Vec::new(),
         })
     }
