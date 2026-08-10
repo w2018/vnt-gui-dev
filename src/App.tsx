@@ -11,6 +11,7 @@ import {
   Home,
   PlugZap,
   RefreshCw,
+  Server,
   Settings,
 } from 'lucide-react';
 import { initTauriListeners } from './lib/tauri';
@@ -24,18 +25,20 @@ import { DeviceList } from './components/DeviceList';
 import { UpdateDialog } from './components/UpdateDialog';
 import { FirstRunWizard } from './components/FirstRunWizard';
 import { SettingsPanel } from './components/SettingsPanel';
+import { FtpService } from './pages/FtpService';
 import { useConfigStore } from './stores/configStore';
 import { useConnectionStore } from './stores/connectionStore';
 import { useTrafficStore } from './stores/trafficStore';
 import { api } from './lib/tauri';
 import type { VntConfig } from './lib/types';
 
-type PageKey = 'home' | 'connect' | 'config' | 'traffic' | 'log' | 'settings' | 'update';
+type PageKey = 'home' | 'connect' | 'config' | 'ftp' | 'traffic' | 'log' | 'settings' | 'update';
 
 const menuItems = [
   { key: 'home', icon: <Home size={16} />, label: '首页' },
   { key: 'connect', icon: <PlugZap size={16} />, label: '连接' },
   { key: 'config', icon: <Database size={16} />, label: '配置' },
+  { key: 'ftp', icon: <Server size={16} />, label: 'FTP 服务' },
   { key: 'traffic', icon: <Activity size={16} />, label: '流量' },
   { key: 'log', icon: <FileText size={16} />, label: '日志' },
   { key: 'settings', icon: <Settings size={16} />, label: '设置' },
@@ -149,6 +152,7 @@ export default function App() {
           </div>
         )}
         {page === 'traffic' && <TrafficChart />}
+        {page === 'ftp' && <FtpService />}
         {page === 'log' && <LogViewer />}
         {page === 'settings' && <SettingsPanel />}
         {page === 'update' && <UpdateDialog />}

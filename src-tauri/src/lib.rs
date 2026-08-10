@@ -2,6 +2,7 @@
 
 mod autostart;
 mod config;
+pub mod ftp;
 mod logger;
 mod settings;
 mod sidecar;
@@ -780,6 +781,34 @@ pub fn run() {
                 });
             }
 
+            // F2：FTP 随应用启动（打开 VNT GUI 即自动启动 FTP 服务）
+            {
+                let config_dir = config::get_config_path()
+                    .parent()
+                    .unwrap_or(&PathBuf::from("."))
+                    .to_path_buf();
+                let ftp_cfg = ftp::config::load_ftp_config(&config_dir);
+                if ftp_cfg.auto_start_with_app && ftp_cfg.enabled {
+                    let handle = app.handle().clone();
+                    tauri::async_runtime::spawn(async move {
+                        tokio::time::sleep(Duration::from_secs(3)).await;
+                        let cfg = {
+                            let state: State<'_, AppState> = handle.state();
+                            let mut c = ftp::config::load_ftp_config(&state.config_dir);
+                            for user in &mut c.users {
+                                if user.password.is_empty() {
+                                    user.password = ftp::config::get_password_hash(&user.username).unwrap_or_default();
+                                }
+                            }
+                            c
+                        };
+                        if let Err(e) = ftp::server::start_ftp(cfg).await {
+                            log::error!("FTP 随应用自启失败: {}", e);
+                        }
+                    });
+                }
+            }
+
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -825,6 +854,13 @@ pub fn run() {
             get_device_list,
             get_traffic_stats,
             get_traffic_period,
+            ftp::ftp_start,
+            ftp::ftp_stop,
+            ftp::ftp_status,
+            ftp::ftp_get_config,
+            ftp::ftp_save_config,
+            ftp::ftp_pick_root_dir,
+            ftp::ftp_get_logs,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

@@ -17,6 +17,7 @@ import type {
   UpdateInfo,
   VntConfig,
 } from './types';
+import type { FtpConfig, FtpLogEntry, FtpServerStatus } from '../types/ftp';
 
 /** 全部 tauri::command 的封装（Rust 参数自动 camelCase → snake_case） */
 export const api = {
@@ -48,6 +49,14 @@ export const api = {
   getPingHost: () => invoke<string | null>('get_ping_host'),
   getLocalInfo: () => invoke<LocalInfo>('get_local_info'),
   getTrafficPeriod: () => invoke<PeriodTraffic>('get_traffic_period'),
+  // FTP 服务（需求 F1-F9）
+  ftpStart: () => invoke<void>('ftp_start'),
+  ftpStop: () => invoke<void>('ftp_stop'),
+  ftpStatus: () => invoke<FtpServerStatus>('ftp_status'),
+  ftpGetConfig: () => invoke<FtpConfig>('ftp_get_config'),
+  ftpSaveConfig: (cfg: FtpConfig) => invoke<void>('ftp_save_config', { cfg }),
+  ftpPickRootDir: () => invoke<string>('ftp_pick_root_dir'),
+  ftpGetLogs: () => invoke<FtpLogEntry[]>('ftp_get_logs'),
 };
 
 /** 初始化 Rust → 前端事件监听，返回取消函数列表 */
