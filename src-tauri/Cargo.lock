@@ -2869,6 +2869,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "network-interface"
+version = "2.0.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4ddcb8865ad3d9950f22f42ffa0ef0aecbfbf191867b3122413602b0a360b2a6"
+dependencies = [
+ "cc",
+ "libc",
+ "thiserror 2.0.20",
+ "winapi",
+]
+
+[[package]]
 name = "new_debug_unreachable"
 version = "1.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5806,6 +5818,7 @@ dependencies = [
  "keyring",
  "libunftp",
  "log",
+ "network-interface",
  "once_cell",
  "parking_lot",
  "rand_core 0.6.4",
@@ -5828,6 +5841,7 @@ dependencies = [
  "tempfile",
  "thiserror 1.0.69",
  "tokio",
+ "tokio-util",
  "toml 0.8.2",
  "unftp-core",
  "uuid",

@@ -861,6 +861,7 @@ pub fn run() {
             ftp::ftp_save_config,
             ftp::ftp_pick_root_dir,
             ftp::ftp_get_logs,
+            ftp::ftp_get_listen_addresses,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

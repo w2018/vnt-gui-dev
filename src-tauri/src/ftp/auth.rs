@@ -78,17 +78,22 @@ impl FtpAuthenticator {
 #[async_trait::async_trait]
 impl Authenticator for FtpAuthenticator {
     async fn authenticate(&self, username: &str, creds: &Credentials) -> Result<Principal, AuthenticationError> {
+        // 诊断日志：认证尝试（用户名 + 来源 IP）
+        ::log::info!("FTP 认证尝试: user={}, ip={}", username, creds.source_ip);
+
         let store = self.store.read();
         let Some(user) = store.find(username) else {
             log::push_log(creds.source_ip, username, "登录失败", "用户不存在");
+            ::log::info!("FTP 认证失败: user={}, ip={}, 原因=用户不存在", username, creds.source_ip);
             return Err(AuthenticationError::new("用户名或密码错误"));
         };
         // 无哈希（keyring 缺失）→ 拒绝
         if user.password.is_empty() {
             log::push_log(creds.source_ip, username, "登录失败", "凭据缺失");
+            ::log::info!("FTP 认证失败: user={}, ip={}, 原因=凭据缺失(keyring 无记录)", username, creds.source_ip);
             return Err(AuthenticationError::new("用户名或密码错误"));
         }
-        // argon2 校验
+        // argon2 校验（keyring 中存储的是 argon2 哈希，非明文）
         let password = creds.password.as_deref().unwrap_or("");
         let parsed = PasswordHash::new(&user.password).map_err(|_| AuthenticationError::new("凭据损坏"))?;
         let ok = Argon2::default()
@@ -96,11 +101,13 @@ impl Authenticator for FtpAuthenticator {
             .is_ok();
         if ok {
             log::push_log(creds.source_ip, username, "登录成功", "CONNECT");
+            ::log::info!("FTP 认证成功: user={}, ip={}", username, creds.source_ip);
             Ok(Principal {
                 username: username.to_string(),
             })
         } else {
             log::push_log(creds.source_ip, username, "登录失败", "密码错误");
+            ::log::info!("FTP 认证失败: user={}, ip={}, 原因=密码错误", username, creds.source_ip);
             Err(AuthenticationError::new("用户名或密码错误"))
         }
     }

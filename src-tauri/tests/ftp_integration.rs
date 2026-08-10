@@ -24,6 +24,7 @@ fn build_config(root: &std::path::Path, users: Vec<FtpUser>) -> FtpConfig {
         auto_start_with_system: false,
         root_dir: root.to_string_lossy().to_string(),
         port: 0, // 由调用方替换为随机端口
+        so_reuseaddr: true,
         pasv_ports: None,
         users,
     }
@@ -108,6 +109,7 @@ async fn start_server(root: &std::path::Path, users: Vec<FtpUser>) -> (u16, toki
 
 #[tokio::test]
 async fn test_ftp_full_flow() {
+    let _ = env_logger::builder().is_test(true).try_init();
     let root = tempfile::tempdir().unwrap();
     let users = vec![admin_user(), readonly_user(), nodelete_user()];
     let (port, handle) = start_server(root.path(), users).await;

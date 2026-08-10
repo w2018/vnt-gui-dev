@@ -57,6 +57,7 @@ export const api = {
   ftpSaveConfig: (cfg: FtpConfig) => invoke<void>('ftp_save_config', { cfg }),
   ftpPickRootDir: () => invoke<string>('ftp_pick_root_dir'),
   ftpGetLogs: () => invoke<FtpLogEntry[]>('ftp_get_logs'),
+  ftpGetListenAddresses: () => invoke<string[]>('ftp_get_listen_addresses'),
 };
 
 /** 初始化 Rust → 前端事件监听，返回取消函数列表 */

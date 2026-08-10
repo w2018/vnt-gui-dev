@@ -56,10 +56,17 @@ pub struct FtpConfig {
     pub root_dir: String,
     /// 控制端口（F7，默认 2121 避免占用系统 21）
     pub port: u16,
+    /// 监听 socket 开启 SO_REUSEADDR（默认 true，停止后端口立即可复用）
+    #[serde(default = "default_true")]
+    pub so_reuseaddr: bool,
     /// PASV 被动端口范围（F7，可选）
     pub pasv_ports: Option<(u16, u16)>,
     /// 用户列表（F5）
     pub users: Vec<FtpUser>,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Default for FtpConfig {
@@ -70,6 +77,7 @@ impl Default for FtpConfig {
             auto_start_with_system: false,
             root_dir: String::new(),
             port: 2121,
+            so_reuseaddr: true,
             pasv_ports: None,
             users: Vec::new(),
         }
@@ -139,6 +147,7 @@ mod tests {
         // V2 要求：验证 Default 实现端口为 2121
         let cfg = FtpConfig::default();
         assert_eq!(cfg.port, 2121);
+        assert!(cfg.so_reuseaddr, "so_reuseaddr 默认应为 true");
         assert!(!cfg.enabled);
         assert!(cfg.users.is_empty());
         assert_eq!(cfg.pasv_ports, None);

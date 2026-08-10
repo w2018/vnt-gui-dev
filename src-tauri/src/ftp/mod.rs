@@ -150,3 +150,65 @@ pub async fn ftp_pick_root_dir(app: AppHandle) -> Result<String, String> {
 pub fn ftp_get_logs() -> Vec<log::FtpLogEntry> {
     log::get_logs()
 }
+
+/// 获取所有监听地址（Bug 3）：遍历活跃网卡 IPv4 + 端口，如 ["192.168.1.100:2121", "10.26.0.3:2121", "127.0.0.1:2121"]
+#[tauri::command]
+pub fn ftp_get_listen_addresses(app: AppHandle) -> Result<Vec<String>, String> {
+    let state: State<'_, AppState> = app.state();
+    let cfg = config::load_ftp_config(&state.config_dir);
+    let ips = collect_ipv4_addresses();
+    Ok(format_addresses(&ips, cfg.port))
+}
+
+/// 遍历所有网络接口，收集 IPv4 地址（去重；含回环 127.0.0.1，含虚拟网卡 10.26.x.x）
+fn collect_ipv4_addresses() -> Vec<String> {
+    use network_interface::{Addr, NetworkInterface, NetworkInterfaceConfig};
+
+    let mut ips: Vec<String> = Vec::new();
+    if let Ok(interfaces) = NetworkInterface::show() {
+        for iface in interfaces {
+            for addr in iface.addr {
+                if let Addr::V4(v4) = addr {
+                    let s = v4.ip.to_string();
+                    if !ips.contains(&s) {
+                        ips.push(s);
+                    }
+                }
+            }
+        }
+    }
+    // 确保回环地址在列（本机访问入口）
+    if !ips.iter().any(|ip| ip == "127.0.0.1") {
+        ips.push("127.0.0.1".to_string());
+    }
+    ips
+}
+
+/// 纯函数：IP 列表 + 端口 → "ip:port" 列表（可单测）
+fn format_addresses(ips: &[String], port: u16) -> Vec<String> {
+    ips.iter().map(|ip| format!("{}:{}", ip, port)).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_format_addresses_mock_ips() {
+        // Bug 3 验证：mock 接口数据 → 断言格式化输出正确
+        let ips = vec!["192.168.1.100".to_string(), "10.26.0.3".to_string(), "127.0.0.1".to_string()];
+        let out = format_addresses(&ips, 2121);
+        assert_eq!(out, vec!["192.168.1.100:2121", "10.26.0.3:2121", "127.0.0.1:2121"]);
+    }
+
+    #[test]
+    fn test_format_addresses_custom_port() {
+        let ips = vec!["10.0.0.5".to_string()];
+        assert_eq!(format_addresses(&ips, 2122), vec!["10.0.0.5:2122"]);
+    }
+
+    #[test]
+    fn test_format_addresses_empty() {
+        assert!(format_addresses(&[], 2121).is_empty());
+    }
+}
