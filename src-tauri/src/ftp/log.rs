@@ -47,9 +47,9 @@ pub fn push_log(ip: IpAddr, user: &str, action: &str, detail: &str) {
     });
 }
 
-/// 存储层操作日志（无客户端 IP 上下文，IP 记 "-"）
-pub fn push_log_anon(user: &impl std::fmt::Display, action: &str, detail: &str) {
-    push_log("0.0.0.0".parse().unwrap_or(IpAddr::from([0, 0, 0, 0])), &user.to_string(), action, detail);
+/// 存储层操作日志（user 携带会话客户端 IP 与用户名）
+pub fn push_log_anon(user: &crate::ftp::auth::FtpUserDetail, action: &str, detail: &str) {
+    push_log(user.client_ip, &user.username, action, detail);
 }
 
 /// 读取全部日志（最新在前）

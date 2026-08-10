@@ -38,6 +38,7 @@ fn user(name: &str, password: &str, perms: FtpPermissions) -> FtpUser {
         username: name.into(),
         password: password.into(),
         permissions: perms,
+        ..Default::default()
     }
 }
 

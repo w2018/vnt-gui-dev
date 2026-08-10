@@ -318,9 +318,12 @@ async fn poll_loop(state: Arc<Mutex<RuntimeState>>, config: VntConfig) {
                         s.vnt_server_host = Some(addr);
                     }
                 }
-                let (nat, _) = crate::parse_info(&text);
-                if nat.is_some() {
-                    s.vnt_nat_type = nat;
+                // NAT 类型：--info 输出的 "NAT type: xxx" 行
+                // ⚠️ 修复：此前误用 parse_info（其返回值为 (设备名, IP)），导致 NAT 类型显示成设备名
+                if let Some(nat) = crate::parse_nat_type(&text) {
+                    if s.vnt_nat_type.as_deref() != Some(nat.as_str()) {
+                        s.vnt_nat_type = Some(nat);
+                    }
                 }
             }
         }

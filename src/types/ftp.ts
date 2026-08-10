@@ -11,7 +11,10 @@ export interface FtpPermissions {
 /** FTP 用户（password 仅编辑时填写，后端不回传） */
 export interface FtpUser {
   username: string;
+  /** 前端临时持有，保存时若为空 = 不改密码（后端保留 keyring 旧密码） */
   password: string;
+  /** 🆕 后端返回的 keyring 状态：该用户是否已设置密码 */
+  password_set?: boolean;
   permissions: FtpPermissions;
 }
 

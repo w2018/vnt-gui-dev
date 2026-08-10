@@ -6,7 +6,7 @@ import { Download, Eraser } from 'lucide-react';
 import { save } from '@tauri-apps/plugin-dialog';
 import { api } from '../lib/tauri';
 import { useLogStore } from '../stores/logStore';
-import type { LogLevel } from '../lib/types';
+import type { LogEntry, LogLevel } from '../lib/types';
 
 const levelColors: Record<LogLevel, string> = {
   info: 'blue',
@@ -30,19 +30,54 @@ function levelRank(l: LogLevel): number {
 export function LogViewer() {
   const { logs, filterLevel, searchTerm, setFilterLevel, setSearchTerm, setLogs } =
     useLogStore();
+  const [daemonLogs, setDaemonLogs] = useState<LogEntry[]>([]); // daemon 运行日志（新→旧）
   const scrollRef = useRef<HTMLDivElement>(null);
   const [exporting, setExporting] = useState(false);
   const [clearing, setClearing] = useState(false);
 
+  // 🆕 挂载时加载历史（GUI 日志 + daemon 日志）+ 每 2s 轮询 daemon 日志
+  useEffect(() => {
+    let alive = true;
+    const load = async () => {
+      try {
+        const [gui, daemon] = await Promise.all([api.getLogs(), api.vntGetLogs()]);
+        if (!alive) return;
+        setLogs(gui);
+        setDaemonLogs(daemon);
+      } catch {
+        /* 忽略瞬时错误（daemon 未启动时 vntGetLogs 返回空） */
+      }
+    };
+    void load();
+    const timer = window.setInterval(async () => {
+      try {
+        const daemon = await api.vntGetLogs();
+        if (alive) setDaemonLogs(daemon);
+      } catch {
+        /* 忽略 */
+      }
+    }, 2000);
+    return () => {
+      alive = false;
+      window.clearInterval(timer);
+    };
+  }, [setLogs]);
+
+  // 合并 GUI 日志（旧→新）+ daemon 日志（新→旧），统一按时间升序展示
+  const merged = useMemo(() => {
+    const all = [...logs, ...daemonLogs];
+    return all.sort((a, b) => (a.timestamp < b.timestamp ? -1 : a.timestamp > b.timestamp ? 1 : 0));
+  }, [logs, daemonLogs]);
+
   // 过滤 + 搜索
   const filtered = useMemo(() => {
     const minRank = filterLevel === 'all' ? 0 : levelRank(filterLevel);
-    return logs.filter((log) => {
+    return merged.filter((log) => {
       if (minRank > 0 && levelRank(log.level) < minRank) return false;
       if (searchTerm && !log.message.includes(searchTerm)) return false;
       return true;
     });
-  }, [logs, filterLevel, searchTerm]);
+  }, [merged, filterLevel, searchTerm]);
 
   // 自动滚到底部
   useEffect(() => {
@@ -71,8 +106,9 @@ export function LogViewer() {
   const handleClear = async () => {
     try {
       setClearing(true);
-      await api.clearLogs();
+      await Promise.all([api.clearLogs(), api.vntClearLogs()]);
       setLogs([]);
+      setDaemonLogs([]);
       message.success('日志已清空');
     } catch (e) {
       message.error(`清空失败: ${String(e)}`);

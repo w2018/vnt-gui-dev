@@ -2,7 +2,7 @@
 
 import { Button, Card, Col, Input, InputNumber, Row, Space, Switch, Typography, message } from 'antd';
 import { FolderOpen } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useFtpStore } from '../../stores/useFtpStore';
 
 export function FtpGeneralSettings() {
@@ -11,6 +11,17 @@ export function FtpGeneralSettings() {
   const [port, setPort] = useState(config.port);
   const [pasv, setPasv] = useState<[number, number] | null>(config.pasv_ports);
   const [busy, setBusy] = useState(false);
+
+  // 🆕 修复：store 异步加载完成/保存后同步本地编辑态（否则重启后 ROOT 目录/端口不显示）
+  useEffect(() => {
+    setRootDir(config.root_dir);
+  }, [config.root_dir]);
+  useEffect(() => {
+    setPort(config.port);
+  }, [config.port]);
+  useEffect(() => {
+    setPasv(config.pasv_ports);
+  }, [config.pasv_ports]);
 
   const handlePick = async () => {
     setBusy(true);
@@ -132,7 +143,7 @@ export function FtpGeneralSettings() {
             <Typography.Text strong>随系统开机自启</Typography.Text>
             <div>
               <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                开机自动拉起 VNT GUI（若同时勾选随应用自启，FTP 将自动启动）
+                开机静默启动 VNT GUI（不弹窗口，daemon 按持久化状态自动恢复 VNT/FTP 服务）
               </Typography.Text>
             </div>
           </Col>

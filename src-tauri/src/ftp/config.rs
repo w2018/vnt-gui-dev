@@ -1,6 +1,6 @@
 //! FTP 服务配置：结构体 + JSON 持久化（%APPDATA%/vnt-gui/ftp_config.json）
 //!
-//! 安全约束：密码**禁止明文落盘**——`FtpUser.password` 标记 `#[serde(skip)]`，
+//! 安全约束：密码**禁止明文落盘**——`FtpUser.password` 标记 `#[serde(skip_serializing)]`，
 //! 实际以明文存入系统凭据库（keyring，Windows = DPAPI 加密），
 //! 认证时从内存用户表直接比较（用户指示：keyring 解密后即明文，无需 argon2）。
 
@@ -33,14 +33,20 @@ impl FtpPermissions {
 
 /// FTP 用户（username + 权限）
 ///
-/// `password` 字段仅存在于内存（明文，来源 keyring），
-/// 序列化时被 `#[serde(skip)]` 跳过 —— JSON 中绝不出现密码。
+/// `password` 字段仅存在于内存（明文，来源 keyring / 前端 IPC 提交），
+/// 序列化时被 `#[serde(skip_serializing)]` 跳过 —— JSON 中绝不出现密码。
+/// （注意：必须用 `skip_serializing` 而非 `skip`，否则 IPC 反序列化时
+///  前端提交的密码也会被丢弃，导致保存永远收到空密码）
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct FtpUser {
     pub username: String,
-    /// 内存中的明文密码（不落盘，来源 keyring）；编辑用户不改密码时为空 → 保留旧密码
-    #[serde(skip)]
+    /// 内存中的明文密码（不落盘，来源 keyring / IPC）；编辑用户不改密码时为空 → 保留旧密码
+    /// `default`：读盘 JSON 无此字段时回退空串（skip_serializing 只影响序列化方向）
+    #[serde(skip_serializing, default)]
     pub password: String,
+    /// 前端展示用：keyring 中是否有密码（每次从 keyring 探测，不落盘）
+    #[serde(default)]
+    pub password_set: bool,
     pub permissions: FtpPermissions,
 }
 
@@ -162,6 +168,7 @@ mod tests {
         cfg.users.push(FtpUser {
             username: "admin".into(),
             password: "supersecret-hash-must-not-leak".into(),
+            password_set: false,
             permissions: FtpPermissions {
                 upload: true,
                 download: true,
@@ -170,10 +177,24 @@ mod tests {
             },
         });
         let json = serde_json::to_string(&cfg).unwrap();
-        assert!(!json.contains("password"), "JSON 中不得出现 password 字段: {}", json);
+        // 注意：password_set 字段名含 "password" 子串，必须精确匹配字段键
+        assert!(!json.contains("\"password\":"), "JSON 中不得出现 password 字段: {}", json);
         assert!(!json.contains("supersecret"), "JSON 中不得出现密码内容: {}", json);
         assert!(json.contains("\"username\":\"admin\""));
         assert!(json.contains("\"upload\":true"));
+    }
+
+    #[test]
+    fn test_password_deserialized_from_ipc_json() {
+        // Bug 回归：IPC 场景（前端提交含 password 的 JSON）→ 反序列化后 password 必须非空。
+        // 若误用 #[serde(skip)]，此处 password 会为空 → 保存永远报"凭据库中不存在"。
+        let json = r#"{"username":"root","password":"123456","permissions":{"upload":true,"download":true,"delete":false,"readonly":false}}"#;
+        let u: FtpUser = serde_json::from_str(json).unwrap();
+        assert_eq!(u.password, "123456", "反序列化必须接收前端提交的密码");
+        // 序列化（写盘/回传）仍必须不含密码
+        let out = serde_json::to_string(&u).unwrap();
+        assert!(!out.contains("123456"), "序列化不得输出密码: {}", out);
+        assert!(!out.contains("\"password\":"), "序列化不得输出 password 字段: {}", out);
     }
 
     #[test]
@@ -199,7 +220,7 @@ mod tests {
         cfg.users.push(FtpUser {
             username: "u1".into(),
             password: "".into(),
-            permissions: FtpPermissions::default(),
+            ..Default::default()
         });
         let dir = tempfile::tempdir().unwrap();
         save_ftp_config(dir.path(), &cfg).unwrap();
@@ -210,6 +231,8 @@ mod tests {
         assert_eq!(loaded.users[0].username, "u1");
         // 密码字段被 skip，roundtrip 后为空
         assert_eq!(loaded.users[0].password, "");
+        // password_set 不落盘：roundtrip 后为 false
+        assert!(!loaded.users[0].password_set);
     }
 
     #[test]

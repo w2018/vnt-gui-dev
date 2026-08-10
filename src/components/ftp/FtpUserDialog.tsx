@@ -64,6 +64,16 @@ export function FtpUserDialog({ open, user, existingNames, onCancel, onOk }: Pro
       permsFinal.upload = false;
       permsFinal.delete = false;
     }
+    if (user && !password) {
+      // 🆕 编辑模式且密码为空 = 不改密码，传空 password（后端保留 keyring 旧密码；
+      //   若 keyring 也没有 → 后端明确报错"凭据库中不存在"，绝不静默）
+      onOk({
+        username: name,
+        password: '',
+        permissions: permsFinal,
+      });
+      return;
+    }
     onOk({
       username: name,
       password,

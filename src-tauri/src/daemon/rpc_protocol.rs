@@ -47,6 +47,10 @@ pub enum DaemonRequest {
     VntListPeers,
     /// 获取 FTP 连接日志
     FtpGetLogs,
+    /// 获取 daemon 运行日志（VNT 实时日志）
+    VntGetLogs,
+    /// 清空 daemon 运行日志
+    VntClearLogs,
     /// 优雅关闭 daemon（完全退出）
     Shutdown,
 }
@@ -75,6 +79,8 @@ pub enum DaemonResponse {
     },
     /// 通用成功
     Ok,
+    /// daemon 运行日志列表（VntGetLogs 响应；新→旧）
+    Logs { entries: Vec<crate::state::LogEntry> },
     /// 通用错误
     Error { code: String, message: String },
     /// 事件推送（daemon 主动 → GUI）

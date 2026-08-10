@@ -41,6 +41,7 @@ fn admin_user() -> FtpUser {
             delete: true,
             readonly: false,
         },
+        password_set: false,
     }
 }
 
@@ -55,6 +56,7 @@ fn readonly_user() -> FtpUser {
             delete: false,
             readonly: true,
         },
+        password_set: false,
     }
 }
 
@@ -69,6 +71,7 @@ fn nodelete_user() -> FtpUser {
             delete: false,
             readonly: false,
         },
+        password_set: false,
     }
 }
 

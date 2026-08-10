@@ -12,9 +12,14 @@ static DATA_DIR: Mutex<Option<PathBuf>> = Mutex::new(None);
 #[cfg(test)]
 pub(crate) static DATA_DIR_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-/// 设置数据目录（默认 %APPDATA%\vnt-gui；测试注入临时目录）
+/// 设置数据目录（默认 = 可执行文件所在目录，即应用安装目录；测试注入临时目录）
 pub fn set_data_dir(dir: PathBuf) {
     *DATA_DIR.lock().unwrap() = Some(dir);
+}
+
+/// 默认数据目录：<安装目录>/data（与 GUI 配置目录统一，卸载时随"删除应用数据"一并清除）
+fn default_data_dir() -> PathBuf {
+    crate::config::app_data_dir()
 }
 
 /// 数据目录
@@ -23,11 +28,7 @@ pub fn daemon_data_dir() -> PathBuf {
         .lock()
         .unwrap()
         .clone()
-        .unwrap_or_else(|| {
-            dirs::config_dir()
-                .unwrap_or_else(|| PathBuf::from("."))
-                .join("vnt-gui")
-        })
+        .unwrap_or_else(default_data_dir)
 }
 
 fn pid_path() -> PathBuf {

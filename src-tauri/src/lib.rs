@@ -1,7 +1,7 @@
 //! VNT GUI —— Tauri 入口、插件注册与全部命令（文档 §3.10 / §3.11）
 
 mod autostart;
-mod config;
+pub mod config;
 pub mod daemon;
 pub mod ftp;
 mod logger;
@@ -14,7 +14,7 @@ mod updater;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use tauri::{Manager, State};
+use tauri::{Emitter, Manager, State};
 use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_notification::NotificationExt;
 
@@ -89,6 +89,75 @@ async fn sync_status_from_daemon(app: &tauri::AppHandle) {
         *state.connection.write() = status.clone();
     }
     let _ = tray::update_tray_status(app, &status);
+}
+
+/// 从 daemon 同步运行信息（虚拟 IP / 真实服务器 / NAT）到 GUI 内存 + 前端事件
+async fn sync_daemon_info(app: &tauri::AppHandle) {    use crate::daemon::rpc_protocol::DaemonResponse;
+    match crate::daemon::rpc_client::get_state().await {
+        Ok(DaemonResponse::State {
+            vnt_virtual_ip,
+            vnt_server_host,
+            vnt_nat_type,
+            ..
+        }) => {
+            {
+                let state: State<'_, AppState> = app.state();
+                // 虚拟 IP：托盘状态行 + 前端连接信息
+                let mut ip = state.virtual_ip.lock();
+                if *ip != vnt_virtual_ip {
+                    *ip = vnt_virtual_ip.clone();
+                    if let Some(ip) = &vnt_virtual_ip {
+                        let _ = app.emit("virtual-ip-assigned", ip);
+                    }
+                }
+                // 真实服务器（连接信息展示）
+                let mut host = state.server_host.lock();
+                if *host != vnt_server_host {
+                    *host = vnt_server_host.clone();
+                    if let Some(h) = &vnt_server_host {
+                        let _ = app.emit("server-address", h);
+                    }
+                }
+                *state.relay_addr.lock() = vnt_server_host.clone();
+                *state.nat_type.lock() = vnt_nat_type;
+            }
+        }
+        _ => {}
+    }
+}
+
+/// 连接信息（前端挂载时主动拉取：虚拟 IP / 真实服务器）
+/// 解决 GUI 重启后事件先于前端监听触发导致的信息丢失（兜底主动拉取）
+#[derive(serde::Serialize)]
+struct ConnectionInfo {
+    virtual_ip: Option<String>,
+    server_address: Option<String>,
+}
+
+/// 获取连接信息（虚拟 IP / 真实服务器）：daemon 状态优先，不可达时返回 GUI 缓存
+#[tauri::command]
+async fn get_connection_info(app: tauri::AppHandle) -> ConnectionInfo {
+    use crate::daemon::rpc_protocol::DaemonResponse;
+    match crate::daemon::rpc_client::get_state().await {
+        Ok(DaemonResponse::State {
+            vnt_virtual_ip,
+            vnt_server_host,
+            ..
+        }) => ConnectionInfo {
+            virtual_ip: vnt_virtual_ip,
+            server_address: vnt_server_host,
+        },
+        _ => {
+            // daemon 不可达 → GUI 缓存（sync_daemon_info 已写入）
+            let state: State<'_, AppState> = app.state();
+            let virtual_ip = state.virtual_ip.lock().clone();
+            let server_address = state.server_host.lock().clone();
+            ConnectionInfo {
+                virtual_ip,
+                server_address,
+            }
+        }
+    }
 }
 
 // ==================== 配置管理 ====================
@@ -379,26 +448,23 @@ fn set_tray_visible(app: tauri::AppHandle, visible: bool) -> Result<(), String> 
 
 // ==================== 日志 ====================
 
-/// 获取历史日志
+/// 获取历史日志（GUI 进程日志：日志页历史加载）
 #[tauri::command]
-fn get_logs(app: tauri::AppHandle) -> Vec<LogEntry> {
-    let state: State<'_, AppState> = app.state();
-    state.log_buffer.get_all()
+fn get_logs(_app: tauri::AppHandle) -> Vec<LogEntry> {
+    crate::logger::get_global_logs()
 }
 
 /// 清空日志
 #[tauri::command]
-fn clear_logs(app: tauri::AppHandle) -> Result<(), String> {
-    let state: State<'_, AppState> = app.state();
-    state.log_buffer.clear();
+fn clear_logs(_app: tauri::AppHandle) -> Result<(), String> {
+    crate::logger::clear_global_logs();
     Ok(())
 }
 
 /// 导出日志到文件
 #[tauri::command]
-fn export_logs(app: tauri::AppHandle, path: String) -> Result<(), String> {
-    let state: State<'_, AppState> = app.state();
-    let logs = state.log_buffer.get_all();
+fn export_logs(_app: tauri::AppHandle, path: String) -> Result<(), String> {
+    let logs = crate::logger::get_global_logs();
     let content = logs
         .iter()
         .map(|e| {
@@ -413,6 +479,24 @@ fn export_logs(app: tauri::AppHandle, path: String) -> Result<(), String> {
         .join("\n");
     std::fs::write(&path, content).map_err(|e| format!("导出失败: {}", e))?;
     Ok(())
+}
+
+/// 获取 daemon 运行日志（VNT 实时日志，经 RPC；daemon 不可达返回空）
+#[tauri::command]
+async fn vnt_get_logs() -> Vec<crate::state::LogEntry> {
+    match crate::daemon::rpc_client::vnt_get_logs().await {
+        Ok(entries) => entries,
+        Err(e) => {
+            log::warn!("获取 daemon 日志失败: {}", e);
+            Vec::new()
+        }
+    }
+}
+
+/// 清空 daemon 运行日志
+#[tauri::command]
+async fn vnt_clear_logs() -> Result<(), String> {
+    crate::daemon::rpc_client::vnt_clear_logs().await
 }
 
 // ==================== 更新 ====================
@@ -720,7 +804,8 @@ async fn start_daemon_sidecar(app: &tauri::AppHandle) -> Result<(), String> {
 /// `autostart`: 开机自启模式（--autostart）——不显示主窗口，daemon 恢复服务后最小化到托盘
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run(autostart: bool) {
-    env_logger::init();
+    // 全局日志：内存缓冲 + logs/app.log + 前端 log-line 事件
+    crate::logger::init(crate::config::log_dir().join("app.log"));
 
     tauri::Builder::default()
         // 单实例：必须最先注册；重复启动时回调聚焦已有窗口（新进程自动退出）
@@ -747,6 +832,10 @@ pub fn run(autostart: bool) {
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .setup(move |app| {
+            // 日志器注入 AppHandle（emit log-line 事件）
+            crate::logger::attach(app.handle().clone());
+            // 旧版数据迁移（%APPDATA%\vnt-gui → data\；安装目录根残留 → data\ + logs\）
+            config::migrate_legacy_data();
             // 全局状态
             let config_dir = config::get_config_path()
                 .parent()
@@ -804,11 +893,12 @@ pub fn run(autostart: bool) {
                     }
                     if ready {
                         log::info!("daemon RPC 就绪");
-                        // 3. 初始同步：状态 → GUI + 托盘
+                        // 3. 初始同步：状态 → GUI + 托盘 + 运行信息（虚拟 IP/服务器/NAT）
                         let status = get_status(handle.clone()).await;
                         let state: State<'_, AppState> = handle.state();
                         *state.connection.write() = status.clone();
                         let _ = tray::update_tray_status(&handle, &status);
+                        sync_daemon_info(&handle).await;
                         // 4. 状态轮询（3 秒）：daemon 状态 → GUI 内存 + 托盘
                         loop {
                             tokio::time::sleep(Duration::from_secs(3)).await;
@@ -816,6 +906,7 @@ pub fn run(autostart: bool) {
                             let state: State<'_, AppState> = handle.state();
                             *state.connection.write() = status.clone();
                             let _ = tray::update_tray_status(&handle, &status);
+                            sync_daemon_info(&handle).await;
                         }
                     } else {
                         log::error!("daemon RPC 未就绪（5 秒超时）");
@@ -895,9 +986,12 @@ pub fn run(autostart: bool) {
             ping_test,
             get_ping_host,
             get_local_info,
+            get_connection_info,
             get_logs,
             clear_logs,
             export_logs,
+            vnt_get_logs,
+            vnt_clear_logs,
             check_update,
             download_and_replace,
             set_autostart,

@@ -266,6 +266,7 @@ mod tests {
                     delete: true,
                     readonly: false,
                 },
+                password_set: false,
             }],
         }
     }

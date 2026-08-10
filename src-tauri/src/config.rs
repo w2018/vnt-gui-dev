@@ -1,8 +1,9 @@
 //! 配置持久化（文档 §3.5）
 //!
-//! 存储路径：Windows `%APPDATA%/vnt-gui/config.json`
+//! 存储路径：Windows 应用安装目录（可执行文件同目录）`config.json`
+//! 说明：配置/日志统一存放于安装目录，卸载时由 NSIS 钩子按用户选择删除。
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -158,12 +159,82 @@ impl ConfigStore {
     }
 }
 
-/// 配置文件路径：%APPDATA%/vnt-gui/config.json
-pub fn get_config_path() -> PathBuf {
-    let appdata = dirs::config_dir().unwrap_or_else(|| PathBuf::from("."));
-    let dir = appdata.join("vnt-gui");
+/// 可执行文件所在目录（即应用安装目录；dev 运行 = target 目录）
+fn exe_dir() -> PathBuf {
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+        .unwrap_or_else(|| {
+            dirs::config_dir()
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join("vnt-gui")
+        })
+}
+
+/// 应用数据目录：<安装目录>/data（配置文件统一存放，卸载可整体清除）
+pub fn app_data_dir() -> PathBuf {
+    let dir = exe_dir().join("data");
     std::fs::create_dir_all(&dir).ok();
-    dir.join("config.json")
+    dir
+}
+
+/// 日志目录：<安装目录>/logs（GUI 日志与 daemon 日志统一存放）
+pub fn log_dir() -> PathBuf {
+    let dir = exe_dir().join("logs");
+    std::fs::create_dir_all(&dir).ok();
+    dir
+}
+
+/// 配置文件路径：<安装目录>/data/config.json
+pub fn get_config_path() -> PathBuf {
+    app_data_dir().join("config.json")
+}
+
+/// 迁移旧版数据到新目录布局：
+/// 1. %APPDATA%/vnt-gui → <安装目录>/data（v2.0.4 之前的配置目录）
+/// 2. <安装目录>根下的旧布局残留（v2.0.4 曾直接放安装目录）→ data/ 与 logs/
+/// 目标文件已存在则跳过，不覆盖新数据。
+pub fn migrate_legacy_data() {
+    // 1. %APPDATA%\vnt-gui → data\
+    let legacy = dirs::config_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("vnt-gui");
+    let data_dir = app_data_dir();
+    if legacy.is_dir() && legacy != data_dir {
+        copy_files(&legacy, &data_dir);
+    }
+    // 2. 安装目录根残留（v2.0.4 中间版本直接写安装目录）
+    for name in ["config.json", "ftp_config.json", "runtime_state.json", "daemon.pid"] {
+        let src = exe_dir().join(name);
+        if src.is_file() {
+            let dst = data_dir.join(name);
+            if !dst.exists() {
+                let _ = std::fs::copy(&src, &dst);
+            }
+        }
+    }
+    let src_log = exe_dir().join("vnt-daemon.log");
+    if src_log.is_file() {
+        let dst = log_dir().join("vnt-daemon.log");
+        if !dst.exists() {
+            let _ = std::fs::copy(&src_log, &dst);
+        }
+    }
+}
+
+/// 将 src 目录下的文件复制到 dst 目录（目标已存在跳过）
+fn copy_files(src: &Path, dst: &Path) {
+    let Ok(entries) = std::fs::read_dir(src) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let s = entry.path();
+        let d = dst.join(&name);
+        if s.is_file() && !d.exists() {
+            let _ = std::fs::copy(&s, &d);
+        }
+    }
 }
 
 /// 加载配置存储（文件不存在或损坏时返回空存储）

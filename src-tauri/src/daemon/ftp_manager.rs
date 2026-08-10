@@ -32,6 +32,7 @@ fn from_rpc_cfg(rpc: FtpConfigWithSecrets) -> FtpConfig {
                 username: u.username,
                 password: u.password,
                 permissions: u.permissions,
+                password_set: false,
             })
             .collect(),
     }
@@ -164,6 +165,7 @@ mod tests {
                 username: "ghost".into(),
                 password: String::new(),
                 permissions: FtpPermissions::default(),
+                password_set: false,
             }],
             ..Default::default()
         };

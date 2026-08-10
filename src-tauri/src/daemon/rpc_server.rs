@@ -10,7 +10,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::rpc_protocol::{DaemonRequest, DaemonResponse};
 use super::state_store::RuntimeState;
-use super::{ftp_manager, vnt_manager};
+use super::{ftp_manager, rt_log, vnt_manager};
 
 /// 运行 RPC 服务（阻塞直到 shutdown 触发）
 pub async fn run(addr: &str, state: Arc<Mutex<RuntimeState>>, shutdown: CancellationToken) {
@@ -204,6 +204,13 @@ async fn handle_request(
                     false,
                 ),
             }
+        }
+        DaemonRequest::VntGetLogs => {
+            (DaemonResponse::Logs { entries: rt_log::get_logs() }, false)
+        }
+        DaemonRequest::VntClearLogs => {
+            rt_log::clear_logs();
+            (DaemonResponse::Ok, false)
         }
         DaemonRequest::Shutdown => {
             // 先停服务再退出

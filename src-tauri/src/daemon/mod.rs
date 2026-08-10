@@ -13,5 +13,6 @@ pub mod pid_file;
 pub mod rpc_client;
 pub mod rpc_protocol;
 pub mod rpc_server;
+pub mod rt_log;
 pub mod state_store;
 pub mod vnt_manager;

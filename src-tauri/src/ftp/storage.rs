@@ -320,6 +320,7 @@ mod tests {
             username: "tester".into(),
             permissions: perms,
             root_dir: root,
+            client_ip: std::net::IpAddr::from([127, 0, 0, 1]),
         }
     }
 

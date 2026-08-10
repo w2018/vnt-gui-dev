@@ -51,7 +51,7 @@ pub(crate) fn to_rpc_cfg(cfg: &config::FtpConfig) -> Result<FtpConfigWithSecrets
     for user in &cfg.users {
         if user.password.is_empty() {
             return Err(format!(
-                "用户 {} 的密码在凭据库中不存在，请重新设置密码后再启动 FTP",
+                "用户 {} 的密码未设置（凭据库中不存在）。请在用户管理中为该用户设置密码后重试",
                 user.username
             ));
         }
@@ -124,14 +124,15 @@ pub async fn ftp_status(app: AppHandle) -> server::FtpServerStatus {
     }
 }
 
-/// 获取 FTP 配置（密码不回传：password 字段为空）
+/// 获取 FTP 配置（密码不回传：password 字段为空，但回传 password_set 状态）
 #[tauri::command]
 pub fn ftp_get_config(app: AppHandle) -> Result<config::FtpConfig, String> {
     let state: State<'_, AppState> = app.state();
     let mut cfg = config::load_ftp_config(&state.config_dir);
-    // 密码哈希绝不出后端（清空回传字段）
     for user in &mut cfg.users {
-        user.password.clear();
+        // 🆕 探测 keyring 是否有密码，设置 password_set 标记（前端展示用）
+        user.password_set = config::get_password(&user.username).is_some();
+        user.password.clear(); // 明文密码绝不回传
     }
     // F3 状态与系统开机自启保持同步显示
     cfg.auto_start_with_system = app.autolaunch().is_enabled().unwrap_or(false);
@@ -167,9 +168,23 @@ pub async fn ftp_save_config(app: AppHandle, cfg: config::FtpConfig) -> Result<(
         if !user.password.is_empty() {
             // 新密码/修改密码 → 明文写入 keyring
             config::set_password(&user.username, &user.password)?;
+            tracing::info!("用户 {} 密码已写入 keyring", user.username);
         } else {
-            // 未改密码 → 保留 keyring 旧密码（内存中用于校验）
-            user.password = config::get_password(&user.username).unwrap_or_default();
+            // 未填密码 → 检查 keyring 是否有旧密码（禁止 unwrap_or_default 静默吞失败）
+            match config::get_password(&user.username) {
+                Some(pwd) => {
+                    // 保留旧密码，确保后续 to_rpc_cfg 不报错
+                    user.password = pwd;
+                    tracing::debug!("用户 {} 保留 keyring 旧密码", user.username);
+                }
+                None => {
+                    // keyring 也没有 → 明确报错，不静默
+                    return Err(format!(
+                        "用户 {} 的密码在凭据库中不存在，请填写密码后保存",
+                        user.username
+                    ));
+                }
+            }
         }
     }
     // 2. 被删除用户的 keyring 清理

@@ -45,7 +45,7 @@ impl ConnectionStatus {
 }
 
 /// 日志级别
-#[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum LogLevel {
     Info,
@@ -55,7 +55,7 @@ pub enum LogLevel {
 }
 
 /// 单条日志记录
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct LogEntry {
     pub timestamp: String,
     pub level: LogLevel,
@@ -128,8 +128,6 @@ pub struct AppState {
     pub nat_type: Mutex<Option<String>>,
     /// sidecar 启停互斥锁（防止 autostart 自动连接与手动连接并发导致双进程）
     pub process_lock: Mutex<()>,
-    /// 日志环形缓冲区（最多 2000 行）
-    pub log_buffer: crate::logger::LogBuffer,
     /// 流量统计快照
     pub traffic_snapshot: RwLock<TrafficSnapshot>,
     /// 按天累计流量统计（今日/昨日/本月/累计，持久化）
@@ -160,7 +158,6 @@ impl AppState {
             relay_addr: Mutex::new(None),
             nat_type: Mutex::new(None),
             process_lock: Mutex::new(()),
-            log_buffer: crate::logger::LogBuffer::new(),
             traffic_snapshot: RwLock::new(TrafficSnapshot::default()),
             traffic_daily: Mutex::new(crate::traffic::TrafficStats::default()),
             sidecar_child: RwLock::new(None),

@@ -71,6 +71,15 @@ export default function App() {
         await refreshConfigs();
         const status = await api.getStatus();
         setStatus(status.status);
+        // 🆕 主动拉取连接信息（虚拟 IP/服务器）：重启后事件可能早于前端监听，兜底恢复显示
+        try {
+          const info = await api.getConnectionInfo();
+          const { setVirtualIp, setServerAddress } = useConnectionStore.getState();
+          setVirtualIp(info.virtual_ip);
+          setServerAddress(info.server_address);
+        } catch {
+          /* 忽略 */
+        }
       } catch (e) {
         message.error(`初始化失败: ${String(e)}`);
       }

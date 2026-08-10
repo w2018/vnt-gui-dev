@@ -39,7 +39,7 @@ export const useFtpStore = create<FtpState>((set, get) => ({
     set({ loading: true });
     try {
       const [config, status, logs] = await Promise.all([
-        api.ftpGetConfig(),
+        api.ftpGetConfig(), // 🆕 现在返回 password_set 字段（keyring 密码状态）
         api.ftpStatus(),
         api.ftpGetLogs(),
       ]);
@@ -60,7 +60,14 @@ export const useFtpStore = create<FtpState>((set, get) => ({
     set({ saving: true });
     try {
       await api.ftpSaveConfig(cfg);
-      set({ config: { ...cfg, users: cfg.users.map((u) => ({ ...u, password: '' })) } });
+      // 🆕 保存成功后从后端重新拉取配置（确保 password_set 正确 + password 字段保持为空）
+      try {
+        const updated = await api.ftpGetConfig();
+        set({ config: updated });
+      } catch {
+        // 拉取失败时用本地配置兜底（密码不回传）
+        set({ config: { ...cfg, users: cfg.users.map((u) => ({ ...u, password: '' })) } });
+      }
       // 保存后状态可能因自动重启变化
       await get().refreshStatus();
     } catch (e) {

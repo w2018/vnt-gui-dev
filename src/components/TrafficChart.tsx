@@ -43,16 +43,16 @@ export function TrafficChart() {
       {/* 实时速率 + 会话累计 */}
       <Row gutter={16} style={{ marginBottom: 8 }}>
         <Col span={6}>
-          <Statistic title="上传速率" value={formatSpeed(current?.upload_speed ?? 0)} />
+          <Statistic title="上传速率" value={formatSpeed(current?.upload_speed ?? 0)} valueStyle={{ fontSize: 16 }} />
         </Col>
         <Col span={6}>
-          <Statistic title="下载速率" value={formatSpeed(current?.download_speed ?? 0)} />
+          <Statistic title="下载速率" value={formatSpeed(current?.download_speed ?? 0)} valueStyle={{ fontSize: 16 }} />
         </Col>
         <Col span={6}>
-          <Statistic title="会话上传" value={formatBytes(totalUpload)} />
+          <Statistic title="会话上传" value={formatBytes(totalUpload)} valueStyle={{ fontSize: 16 }} />
         </Col>
         <Col span={6}>
-          <Statistic title="会话下载" value={formatBytes(totalDownload)} />
+          <Statistic title="会话下载" value={formatBytes(totalDownload)} valueStyle={{ fontSize: 16 }} />
         </Col>
       </Row>
 
@@ -72,17 +72,18 @@ export function TrafficChart() {
                   title={title}
                   value={formatBytes(d?.sent ?? 0)}
                   prefix={<Tooltip title="上传">↑</Tooltip>}
+                  valueStyle={{ fontSize: 14 }}
                 />
                 <Statistic
                   title=" "
                   value={formatBytes(d?.recv ?? 0)}
                   prefix={<Tooltip title="下载">↓</Tooltip>}
-                  valueStyle={{ color: '#22c55e' }}
+                  valueStyle={{ color: '#22c55e', fontSize: 14 }}
                 />
                 <Statistic
                   title="合计"
                   value={formatBytes(d ? d.sent + d.recv : 0)}
-                  valueStyle={{ fontWeight: 600 }}
+                  valueStyle={{ fontWeight: 600, fontSize: 14 }}
                 />
               </Card>
             </Col>
@@ -96,8 +97,8 @@ export function TrafficChart() {
         <ResponsiveContainer width="100%" height={360}>
           <LineChart data={points} margin={{ top: 8, right: 16, bottom: 8, left: 8 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="#eee" />
-            <XAxis dataKey="time" tick={{ fontSize: 12 }} />
-            <YAxis tickFormatter={(v: number) => formatSpeed(v)} tick={{ fontSize: 12 }} />
+            <XAxis dataKey="time" tick={{ fontSize: 11 }} />
+            <YAxis tickFormatter={(v: number) => formatSpeed(v)} tick={{ fontSize: 11 }} />
             <RechartsTooltip formatter={(v: number | string) => formatSpeed(Number(v))} />
             <Line
               type="monotone"

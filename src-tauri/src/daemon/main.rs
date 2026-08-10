@@ -16,15 +16,19 @@ use vnt_gui_lib::daemon::{
 
 #[tokio::main]
 async fn main() {
-    // 日志写入文件（%TEMP%\vnt-daemon.log），不占用控制台
-    let log_path = std::env::temp_dir().join("vnt-daemon.log");
+    // 日志写入文件（<安装目录>/logs/vnt-daemon.log），不占用控制台
+    let log_path = vnt_gui_lib::config::log_dir().join("vnt-daemon.log");
     if let Ok(file) = std::fs::File::create(&log_path) {
-        let _ = tracing_subscriber::fmt()
-            .with_writer(file)
-            .with_env_filter(
-                tracing_subscriber::EnvFilter::try_from_default_env()
-                    .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-            )
+        use tracing_subscriber::prelude::*;
+        // EnvFilter 作为独立过滤层 + 文件层 + 内存缓冲层（GUI 经 RPC 拉取实时日志）
+        let filter =
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+        let file_layer = tracing_subscriber::fmt::layer().with_writer(file);
+        let _ = tracing_subscriber::registry()
+            .with(filter)
+            .with(file_layer)
+            .with(vnt_gui_lib::daemon::rt_log::RtLogLayer)
             .try_init();
         // 桥接 log crate（ftp/server.rs 等使用 log::info!）
         let _ = tracing_log::LogTracer::init();

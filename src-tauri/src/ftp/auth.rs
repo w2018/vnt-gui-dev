@@ -4,7 +4,9 @@
 //! （用户指示，无需 argon2）；内存中的用户表与 config/storage 共享。
 //! 登录成功/失败同时写入连接日志（F9）与 daemon 日志（2E 诊断增强）。
 
+use std::collections::HashMap;
 use std::fmt;
+use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -15,12 +17,14 @@ use unftp_core::auth::Credentials;
 use crate::ftp::config::{FtpConfig, FtpPermissions, FtpUser};
 use crate::ftp::log;
 
-/// 会话用户：认证通过后的完整用户信息（权限 + 根目录）
+/// 会话用户：认证通过后的完整用户信息（权限 + 根目录 + 客户端 IP）
 #[derive(Debug, Clone)]
 pub struct FtpUserDetail {
     pub username: String,
     pub permissions: FtpPermissions,
     pub root_dir: PathBuf,
+    /// 客户端 IP（登录时从 creds.source_ip 记录；用于操作日志展示真实来源）
+    pub client_ip: IpAddr,
 }
 
 impl UserDetail for FtpUserDetail {
@@ -46,6 +50,9 @@ impl fmt::Display for FtpUserDetail {
 pub struct UserStore {
     pub users: Vec<FtpUser>,
     pub root_dir: PathBuf,
+    /// 最近登录 IP（username → client IP）：authenticate 成功时写入，
+    /// provide_user_detail 读取填充到会话用户（storage 操作日志使用）
+    pub client_ips: parking_lot::Mutex<HashMap<String, IpAddr>>,
 }
 
 impl UserStore {
@@ -53,6 +60,7 @@ impl UserStore {
         Self {
             users: cfg.users.clone(),
             root_dir: PathBuf::from(&cfg.root_dir),
+            client_ips: Default::default(),
         }
     }
 
@@ -107,6 +115,8 @@ impl Authenticator for FtpAuthenticator {
         if user.password == password {
             log::push_log(creds.source_ip, username, "登录成功", "CONNECT");
             ::log::info!("FTP 认证成功: user={}, ip={}", username, creds.source_ip);
+            // 记录会话 IP（provide_user_detail 填充到 FtpUserDetail，供操作日志使用）
+            store.client_ips.lock().insert(username.to_string(), creds.source_ip);
             Ok(Principal {
                 username: username.to_string(),
             })
@@ -139,10 +149,18 @@ impl UserDetailProvider for FtpUserDetailProvider {
         let user = store
             .find(&principal.username)
             .ok_or_else(|| UserDetailError::new("用户不存在"))?;
+        // 客户端 IP：从登录记录读取（未记录时回退 127.0.0.1）
+        let client_ip = store
+            .client_ips
+            .lock()
+            .get(&principal.username)
+            .copied()
+            .unwrap_or(IpAddr::from([127, 0, 0, 1]));
         Ok(FtpUserDetail {
             username: user.username.clone(),
             permissions: user.permissions.clone(),
             root_dir: store.root_dir.clone(),
+            client_ip,
         })
     }
 }
@@ -159,6 +177,7 @@ mod tests {
             username: "admin".into(),
             password: "s3cret".into(),
             permissions: FtpPermissions::default(),
+            password_set: false,
         });
         let store = UserStore::from_config(&cfg);
         assert_eq!(store.find("admin").unwrap().password, "s3cret");
@@ -167,6 +186,7 @@ mod tests {
             username: "nopwd".into(),
             password: String::new(),
             permissions: FtpPermissions::default(),
+            password_set: false,
         });
         let store = UserStore::from_config(&cfg);
         assert!(store.find("nopwd").unwrap().password.is_empty());
@@ -179,6 +199,7 @@ mod tests {
             username: "admin".into(),
             password: String::new(),
             permissions: FtpPermissions::default(),
+            password_set: false,
         });
         let store = UserStore::from_config(&cfg);
         assert!(store.find("admin").is_some());

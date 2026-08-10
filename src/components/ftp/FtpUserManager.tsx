@@ -75,6 +75,16 @@ export function FtpUserManager() {
             render: (v: string) => <Typography.Text strong>{v}</Typography.Text>,
           },
           {
+            title: '密码状态',
+            dataIndex: 'password_set',
+            render: (_: unknown, record: FtpUser) =>
+              record.password_set ? (
+                <Tag color="green">● 已设置</Tag>
+              ) : (
+                <Tag color="red">● 未设置（需重设）</Tag>
+              ),
+          },
+          {
             title: '权限',
             dataIndex: 'permissions',
             render: (_: unknown, record: FtpUser) => <Space size={4}>{permissionTags(record)}</Space>,

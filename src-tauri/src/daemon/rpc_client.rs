@@ -141,6 +141,22 @@ pub async fn ftp_get_logs() -> Result<Vec<crate::ftp::log::FtpLogEntry>, String>
     }
 }
 
+/// 获取 daemon 运行日志（VNT 实时日志，新→旧）
+pub async fn vnt_get_logs() -> Result<Vec<crate::state::LogEntry>, String> {
+    match send_request(DaemonRequest::VntGetLogs).await? {
+        DaemonResponse::Logs { entries } => Ok(entries),
+        other => Err(format!("意外响应: {:?}", other)),
+    }
+}
+
+/// 清空 daemon 运行日志
+pub async fn vnt_clear_logs() -> Result<(), String> {
+    match send_request(DaemonRequest::VntClearLogs).await? {
+        DaemonResponse::Ok => Ok(()),
+        other => Err(format!("意外响应: {:?}", other)),
+    }
+}
+
 /// 优雅关闭 daemon（完全退出）
 pub async fn shutdown_daemon() -> Result<(), String> {
     let _ = send_request(DaemonRequest::Shutdown).await;
