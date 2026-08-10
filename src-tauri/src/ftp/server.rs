@@ -41,7 +41,7 @@ pub struct FtpServerStatus {
 /// 运行中实例的句柄
 struct FtpRuntime {
     /// 服务任务句柄（结束 = 服务停止 + 端口释放）
-    handle: tauri::async_runtime::JoinHandle<()>,
+    handle: tokio::task::JoinHandle<()>,
     /// 停止信号
     cancel: CancellationToken,
     /// 监听地址（启动时绑定成功后的实际地址）
@@ -170,7 +170,7 @@ pub async fn start_ftp(cfg: FtpConfig) -> Result<(), String> {
     let bind = format!("0.0.0.0:{}", cfg.port);
     let bind_for_task = bind.clone();
     let (bind_tx, bind_rx) = tokio::sync::oneshot::channel::<Result<(), String>>();
-    let handle = tauri::async_runtime::spawn(async move {
+    let handle = tokio::spawn(async move {
         let bind_for_msg = bind_for_task.clone();
         match server.listen(bind_for_task).await {
             Ok(()) => {

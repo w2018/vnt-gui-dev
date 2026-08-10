@@ -4,6 +4,7 @@ version = "2.0.2"
 description = "VNT 虚拟局域网图形化管理工具"
 authors = ["vnt-gui"]
 edition = "2021"
+default-run = "vnt-gui"
 
 [lib]
 # The `_lib` suffix may seem redundant but it is necessary
@@ -52,12 +53,21 @@ rand_core = { version = "0.6", features = ["getrandom"] }
 libunftp = { version = "0.23", default-features = false, features = ["ring"] }
 network-interface = "2"
 tokio-util = "0.7"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-log = "0.2"
+
+# Daemon 独立可执行文件（服务解耦）
+[[bin]]
+name = "vnt-daemon"
+path = "src/daemon/main.rs"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
     "Win32_NetworkManagement_IpHelper",
     "Win32_NetworkManagement_Ndis",
+    "Win32_System_Threading",
 ] }
 
 [dev-dependencies]

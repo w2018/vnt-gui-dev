@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 /// VNT 连接配置（对应 vnt-cli 命令行参数）
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct VntConfig {
     /// UUID，唯一标识
     pub id: String,

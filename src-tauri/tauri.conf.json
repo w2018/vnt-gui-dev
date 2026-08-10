@@ -41,7 +41,8 @@
     "shortDescription": "VNT 虚拟局域网图形化管理工具",
     "longDescription": "为 vnt-dev/vnt 提供图形化界面的 Windows 桌面应用",
     "externalBin": [
-      "binaries/vnt-cli"
+      "binaries/vnt-cli",
+      "binaries/vnt-daemon"
     ],
     "resources": {
       "binaries/wintun.dll": "wintun.dll"

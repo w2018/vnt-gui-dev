@@ -81,7 +81,7 @@ pub struct PeerTraffic {
 }
 
 /// 设备列表条目（文档 §4.2.6）
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PeerInfo {
     pub name: String,
     pub virtual_ip: String,

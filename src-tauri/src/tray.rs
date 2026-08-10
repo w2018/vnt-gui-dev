@@ -23,7 +23,6 @@ use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_clipboard_manager::ClipboardExt;
 
 use crate::config::load_config_store;
-use crate::sidecar::{self, load_active_config};
 use crate::state::{AppState, ConnectionStatus};
 
 /// 托盘 ID
@@ -48,7 +47,10 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
     let sep1 = PredefinedMenuItem::separator(app)?;
     let sep2 = PredefinedMenuItem::separator(app)?;
     let sep3 = PredefinedMenuItem::separator(app)?;
-    let quit_item = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
+    let sep4 = PredefinedMenuItem::separator(app)?;
+    // 退出拆分：仅退 GUI（daemon 与服务保持运行）/ 完全退出
+    let exit_gui_item = MenuItem::with_id(app, "exit_gui_only", "仅退出 GUI（保持服务运行）", true, None::<&str>)?;
+    let exit_full_item = MenuItem::with_id(app, "exit_full", "完全退出（含所有服务）", true, None::<&str>)?;
 
     let menu = Menu::with_items(
         app,
@@ -62,7 +64,9 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
             &settings_item,
             &traffic_item,
             &sep3,
-            &quit_item,
+            &exit_gui_item,
+            &sep4,
+            &exit_full_item,
         ],
     )?;
 
@@ -115,15 +119,30 @@ pub fn show_main_window(app: &AppHandle) {
 /// 托盘菜单事件处理
 async fn handle_tray_menu(app: AppHandle, item_id: &str) {
     match item_id {
-        // 快速连接：读取活动配置并启动
+        // 快速连接：读取活动配置 → daemon RPC 启动
         "connect" => {
-            if let Some(config) = load_active_config(&app) {
-                let _ = sidecar::start_vnt(app, config);
+            if let Some(config) = crate::config::load_config_store().get_active().cloned() {
+                let _ = crate::daemon::rpc_client::vnt_start(config).await;
             }
         }
-        // 断开连接
+        // 断开连接 → daemon RPC
         "disconnect" => {
-            let _ = sidecar::stop_vnt(app);
+            let _ = crate::daemon::rpc_client::vnt_stop().await;
+        }
+        // 仅退出 GUI：daemon 独立进程保持运行，服务不断
+        "exit_gui_only" => {
+            app.exit(0);
+        }
+        // 完全退出：先停服务 + 关闭 daemon，再退出 GUI
+        "exit_full" => {
+            let app2 = app.clone();
+            tauri::async_runtime::spawn(async move {
+                let _ = crate::daemon::rpc_client::vnt_stop().await;
+                let _ = crate::daemon::rpc_client::ftp_stop().await;
+                let _ = crate::daemon::rpc_client::shutdown_daemon().await;
+                tokio::time::sleep(Duration::from_millis(500)).await;
+                app2.exit(0);
+            });
         }
         // 2b：点击状态行 → 复制当前 IP 到剪贴板
         "copy_ip" => {
@@ -189,9 +208,8 @@ async fn handle_tray_menu(app: AppHandle, item_id: &str) {
             show_main_window(&app);
             let _ = app.emit("navigate", "/traffic");
         }
+        // 兼容旧 id（无 daemon 时旧菜单残留不会出现；直接走完全退出逻辑）
         "quit" => {
-            // 先停止 sidecar，再退出
-            let _ = sidecar::stop_vnt(app.clone());
             app.exit(0);
         }
         _ => {}

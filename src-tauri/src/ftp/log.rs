@@ -8,10 +8,9 @@ use std::net::IpAddr;
 use std::sync::OnceLock;
 
 use parking_lot::Mutex;
-use serde::Serialize;
 
 /// 单条连接日志
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct FtpLogEntry {
     /// 事件时间（本地时间 HH:MM:SS）
     pub time: String,

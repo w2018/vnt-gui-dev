@@ -2,10 +2,10 @@
 
 mod autostart;
 mod config;
+pub mod daemon;
 pub mod ftp;
 mod logger;
 mod settings;
-mod sidecar;
 mod state;
 mod traffic;
 mod tray;
@@ -23,9 +23,9 @@ use settings::AppSettings;
 use state::{AppState, ConnectionStatus, LogEntry, TrafficSnapshot};
 use updater::UpdateInfo;
 
-// ==================== 连接控制 ====================
+// ==================== 连接控制（经 daemon RPC） ====================
 
-/// 启动连接（使用指定配置）
+/// 启动连接（使用指定配置）：GUI 只传配置，进程由 daemon 管理
 #[tauri::command]
 async fn start_connection(app: tauri::AppHandle, config_id: String) -> Result<(), String> {
     let mut store = config::load_config_store();
@@ -38,24 +38,57 @@ async fn start_connection(app: tauri::AppHandle, config_id: String) -> Result<()
 
     {
         let state: State<'_, AppState> = app.state();
-        *state.active_config_id.write() = Some(config_id);
+        *state.active_config_id.write() = Some(config_id.clone());
     }
 
-    sidecar::start_vnt(app, cfg)
+    crate::daemon::rpc_client::vnt_start(cfg).await?;
+    // 即时更新 GUI 状态（轮询兜底）
+    sync_status_from_daemon(&app).await;
+    Ok(())
 }
 
 /// 停止连接
 #[tauri::command]
 async fn stop_connection(app: tauri::AppHandle) -> Result<(), String> {
-    sidecar::stop_vnt(app)
+    crate::daemon::rpc_client::vnt_stop().await?;
+    sync_status_from_daemon(&app).await;
+    Ok(())
 }
 
-/// 获取当前连接状态
+/// 获取当前连接状态（daemon 状态映射）
 #[tauri::command]
 async fn get_status(app: tauri::AppHandle) -> ConnectionStatus {
-    let state: State<'_, AppState> = app.state();
-    let status = state.connection.read().clone();
-    status
+    match crate::daemon::rpc_client::get_state().await {
+        Ok(crate::daemon::rpc_protocol::DaemonResponse::State {
+            vnt_running,
+            vnt_connected,
+            ..
+        }) => {
+            if vnt_connected {
+                ConnectionStatus::Connected
+            } else if vnt_running {
+                ConnectionStatus::Starting
+            } else {
+                ConnectionStatus::Stopped
+            }
+        }
+        _ => {
+            // daemon 不可达（未启动/异常）→ 保持 GUI 缓存
+            let state: State<'_, AppState> = app.state();
+            let status = state.connection.read().clone();
+            status
+        }
+    }
+}
+
+/// 从 daemon 同步状态到 GUI 内存（AppState + 托盘）
+async fn sync_status_from_daemon(app: &tauri::AppHandle) {
+    let status = get_status(app.clone()).await;
+    {
+        let state: State<'_, AppState> = app.state();
+        *state.connection.write() = status.clone();
+    }
+    let _ = tray::update_tray_status(app, &status);
 }
 
 // ==================== 配置管理 ====================
@@ -114,9 +147,9 @@ fn import_configs(path: String) -> Result<Vec<VntConfig>, String> {
 
 // ==================== 网络检测 ====================
 
-/// 获取 ping 目标 host：优先活动配置的服务器地址，其次 vnt-cli 日志提取的实际连接服务器
+/// 获取 ping 目标 host：优先活动配置的服务器地址，其次 daemon 实际连接服务器
 #[tauri::command]
-fn get_ping_host(app: tauri::AppHandle) -> Option<String> {
+async fn get_ping_host(app: tauri::AppHandle) -> Option<String> {
     // 1. 活动配置 server_address（去协议前缀/端口）
     if let Some(cfg) = config::load_config_store().get_active() {
         if let Some(server) = &cfg.server_address {
@@ -125,10 +158,19 @@ fn get_ping_host(app: tauri::AppHandle) -> Option<String> {
             }
         }
     }
-    // 2. 日志提取的实际连接服务器（如 "8.134.66.150"）
-    let state: State<'_, AppState> = app.state();
-    let host = state.server_host.lock().clone();
-    host
+    // 2. daemon 实际连接服务器（如 "8.134.66.150:29872" → 纯 host）
+    if let Ok(crate::daemon::rpc_protocol::DaemonResponse::State {
+        vnt_server_host,
+        ..
+    }) = crate::daemon::rpc_client::get_state().await
+    {
+        if let Some(addr) = vnt_server_host {
+            if let Some(host) = extract_host(&addr) {
+                return Some(host);
+            }
+        }
+    }
+    None
 }
 
 /// 从服务器地址提取纯 host（去 "tcp://" 前缀与端口；IPv6 不做端口剥离）
@@ -422,124 +464,43 @@ async fn get_vnt_version(app: tauri::AppHandle) -> Result<String, String> {
     updater::local_vnt_version(&app).await
 }
 
-/// 获取在线设备列表（后台运行 vnt 时执行 `--list` 解析，尽力而为）
-/// 关键：必须携带活动配置的 token/server（-k/-s），否则查询的是默认空 token 组（别人的设备）
-/// 本机识别：优先 `--info`（Name/Virtual ip），失败降级 register 日志/配置设备名/主机名
+/// 获取在线设备列表（数据来自 daemon 定期 --list 解析；本机识别用 daemon 虚拟 IP）
 /// 返回：过滤本机后的设备列表 + 本机设备信息
 #[tauri::command]
 async fn get_device_list(app: tauri::AppHandle) -> Result<state::DeviceListResult, String> {
-    use tauri_plugin_shell::ShellExt;
+    use crate::daemon::rpc_protocol::DaemonResponse;
 
-    // 活动配置参数（--list / --info 共用）
-    let store = config::load_config_store();
-    let active = store.get_active();
-    let mut net_args: Vec<String> = Vec::new();
-    if let Some(cfg) = &active {
-        if !cfg.token.is_empty() {
-            net_args.push("-k".to_string());
-            net_args.push(cfg.token.clone());
-        }
-        if let Some(server) = &cfg.server_address {
-            net_args.push("-s".to_string());
-            net_args.push(server.clone());
-        }
-    }
-
-    // 1. 本机信息：优先 --info（需后台 vnt-cli 运行；失败自然降级）
-    let mut local_name: Option<String> = None;
-    let mut local_ip: Option<String> = None;
-    if let Ok(info_output) = app
-        .shell()
-        .sidecar("vnt-cli")
-        .map_err(|e| format!("sidecar 不可用: {}", e))?
-        .args({
-            let mut a = vec!["--info".to_string()];
-            a.extend(net_args.iter().cloned());
-            a
-        })
-        .output()
-        .await
-    {
-        let stdout = String::from_utf8_lossy(&info_output.stdout);
-        let stderr = String::from_utf8_lossy(&info_output.stderr);
-        let text = if !stdout.trim().is_empty() { &stdout } else { &stderr };
-        let (n, i) = parse_info(text);
-        local_name = n;
-        local_ip = i;
-        // 真实连接服务器（Relay server: 8.134.66.150:29872）→ 完整地址展示 + 纯 host ping
-        if let Some(addr) = parse_relay_addr(text) {
-            let state: tauri::State<'_, AppState> = app.state();
-            *state.relay_addr.lock() = Some(addr.clone());
-            if let Some(host) = extract_host(&addr) {
-                *state.server_host.lock() = Some(host);
-            }
-        }
-        // NAT 类型（NAT type: Cone）
-        if let Some(nat) = parse_nat_type(text) {
-            let state: tauri::State<'_, AppState> = app.state();
-            *state.nat_type.lock() = Some(nat);
-        }
-    }
-    // 降级：register 日志解析的本机 IP + 配置设备名/主机名
-    if local_name.is_none() {
-        local_name = active
-            .as_ref()
-            .and_then(|c| c.device_name.clone())
-            .filter(|n| !n.is_empty())
-            .or_else(|| {
-                let h = std::env::var("COMPUTERNAME").unwrap_or_default();
-                if h.is_empty() { None } else { Some(h) }
-            });
-    }
-    if local_ip.is_none() {
-        let state: tauri::State<'_, AppState> = app.state();
-        local_ip = state.virtual_ip.lock().clone();
-    }
-
-    // 2. --list 解析设备
-    let list_args = {
-        let mut a = vec!["--list".to_string()];
-        a.extend(net_args.iter().cloned());
-        a
-    };
-    let output = app
-        .shell()
-        .sidecar("vnt-cli")
-        .map_err(|e| format!("sidecar 不可用: {}", e))?
-        .args(&list_args)
-        .output()
-        .await
-        .map_err(|e| format!("执行 vnt-cli --list 失败: {}", e))?;
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let text = if !stdout.trim().is_empty() { &stdout } else { &stderr };
-
-    // 先尝试 JSON 解析，失败则按文本行解析（真实格式见 parse_list_line）
-    let peers = if let Ok(peers) = serde_json::from_str::<Vec<state::PeerInfo>>(text) {
-        peers
-    } else {
-        let mut peers = Vec::new();
-        for line in text.lines() {
-            if let Some(peer) = parse_list_line(line) {
-                peers.push(peer);
-            }
-        }
-        peers
+    // daemon 状态：peers + 本机虚拟 IP
+    let (peers, local_ip) = match crate::daemon::rpc_client::get_state().await {
+        Ok(DaemonResponse::State {
+            peers, vnt_virtual_ip, ..
+        }) => (peers, vnt_virtual_ip),
+        Ok(other) => return Err(format!("daemon 响应异常: {:?}", other)),
+        Err(e) => return Err(format!("获取设备列表失败: {}", e)),
     };
 
-    // 3. 过滤本机：IP 匹配 或 设备名匹配（覆盖残留注册：同名不同 IP 的历史行也过滤）
+    // 本机名：配置设备名 / 主机名
+    let local_name = config::load_config_store()
+        .get_active()
+        .and_then(|c| c.device_name.clone())
+        .filter(|n| !n.is_empty())
+        .or_else(|| {
+            let h = std::env::var("COMPUTERNAME").unwrap_or_default();
+            if h.is_empty() { None } else { Some(h) }
+        });
+
+    // 过滤本机：IP 匹配 或 设备名匹配（覆盖残留注册：同名不同 IP 的历史行也过滤）
     let mut devices = Vec::with_capacity(peers.len());
     let mut local = None;
     for peer in peers {
         let is_local = match &local_ip {
-            Some(ip) => peer.virtual_ip == *ip || match &local_name {
-                Some(n) => peer.name.eq_ignore_ascii_case(n),
-                None => false,
-            },
-            None => match &local_name {
-                Some(n) => peer.name.eq_ignore_ascii_case(n),
-                None => false,
-            },
+            Some(ip) => peer.virtual_ip == *ip
+                || local_name
+                    .as_ref()
+                    .is_some_and(|n| peer.name.eq_ignore_ascii_case(n)),
+            None => local_name
+                .as_ref()
+                .is_some_and(|n| peer.name.eq_ignore_ascii_case(n)),
         };
         if is_local {
             local = Some(peer);
@@ -547,6 +508,7 @@ async fn get_device_list(app: tauri::AppHandle) -> Result<state::DeviceListResul
         }
         devices.push(peer);
     }
+    let _ = app;
     Ok(state::DeviceListResult { devices, local })
 }
 
@@ -603,17 +565,29 @@ pub struct LocalInfo {
 
 /// 获取本机 NAT 类型与真实连接服务器（来自 --info 解析，连接后有效）
 /// relay_server = 完整地址 "IP:端口"（展示用）；ping 目标仍走 get_ping_host（纯 host，互不影响）
+/// relay_server = 完整地址 "IP:端口"（展示用）；ping 目标仍走 get_ping_host（纯 host，互不影响）
 #[tauri::command]
-fn get_local_info(app: tauri::AppHandle) -> LocalInfo {
-    let state: State<'_, AppState> = app.state();
-    let nat_guard = state.nat_type.lock();
-    let nat_type = nat_guard.clone();
-    drop(nat_guard);
-    let addr_guard = state.relay_addr.lock();
-    let relay_server = addr_guard.clone();
-    LocalInfo {
-        nat_type,
-        relay_server,
+async fn get_local_info(app: tauri::AppHandle) -> LocalInfo {
+    use crate::daemon::rpc_protocol::DaemonResponse;
+    match crate::daemon::rpc_client::get_state().await {
+        Ok(DaemonResponse::State {
+            vnt_nat_type,
+            vnt_server_host,
+            ..
+        }) => LocalInfo {
+            nat_type: vnt_nat_type,
+            relay_server: vnt_server_host,
+        },
+        _ => {
+            // daemon 不可达 → 保持上次本地缓存
+            let state: State<'_, AppState> = app.state();
+            let nat = state.nat_type.lock().clone();
+            let relay = state.relay_addr.lock().clone();
+            LocalInfo {
+                nat_type: nat,
+                relay_server: relay,
+            }
+        }
     }
 }
 
@@ -710,6 +684,36 @@ async fn get_traffic_period(app: tauri::AppHandle) -> Result<crate::traffic::Per
     Ok(daily.period())
 }
 
+/// 启动 daemon（独立进程，脱离 tauri Job Object，GUI 退出不影响其存活）
+/// - 已存活（pid 文件 + 进程探测）→ 直接复用
+/// - 未存活 → 从 resource_dir 直接 spawn vnt-daemon.exe
+async fn start_daemon_sidecar(app: &tauri::AppHandle) -> Result<(), String> {
+    use tauri::Manager;
+
+    // 1. 已有 daemon 存活则复用（pid 文件优先）
+    if crate::daemon::pid_file::is_daemon_running() {
+        log::info!("daemon 已在运行，复用");
+        return Ok(());
+    }
+
+    // 2. 定位 daemon 可执行文件（bundle 后与主程序同目录；dev 在 target/debug）
+    let exe_path = app
+        .path()
+        .resource_dir()
+        .map_err(|e| format!("定位资源目录失败: {}", e))?
+        .join("vnt-daemon.exe");
+    if !exe_path.exists() {
+        return Err(format!("daemon 可执行文件不存在: {}", exe_path.display()));
+    }
+
+    // 3. 直接 spawn（std::process：无 Job Object，GUI 退出 daemon 继续运行）
+    let child = std::process::Command::new(&exe_path)
+        .spawn()
+        .map_err(|e| format!("daemon 启动失败 ({}): {}", exe_path.display(), e))?;
+    log::info!("daemon 已启动（pid={}）", child.id());
+    Ok(())
+}
+
 // ==================== 应用入口 ====================
 
 /// 应用入口
@@ -759,7 +763,7 @@ pub fn run() {
             // 流量监控（每秒采集虚拟网卡统计）
             traffic::start_traffic_monitor(app.handle().clone());
 
-            // 开机自启：延迟 3 秒自动连接（等系统网络就绪）
+            // 开机自启：延迟 3 秒自动连接（等系统网络就绪）—— 经 daemon
             let args: Vec<String> = std::env::args().collect();
             if args.iter().any(|a| a == autostart::AUTOSTART_FLAG) {
                 // 1a：自启启动时按设置隐藏托盘（静默后台运行）
@@ -769,19 +773,53 @@ pub fn run() {
                         log::info!("开机自启：按设置隐藏托盘");
                     }
                 }
+                log::info!("自启参数：daemon 将按持久化状态恢复服务");
+            }
+
+            // Daemon 生命周期：检测 → 启动（sidecar）→ 状态轮询
+            {
                 let handle = app.handle().clone();
                 tauri::async_runtime::spawn(async move {
-                    tokio::time::sleep(Duration::from_secs(3)).await;
-                    if let Some(cfg) = sidecar::load_active_config(&handle) {
-                        log::info!("自启参数，自动连接配置: {}", cfg.name);
-                        if let Err(e) = sidecar::start_vnt(handle, cfg) {
-                            log::error!("自启自动连接失败: {}", e);
+                    // 1. daemon 未运行 → 启动
+                    if !crate::daemon::pid_file::is_daemon_running() {
+                        match start_daemon_sidecar(&handle).await {
+                            Ok(()) => log::info!("daemon sidecar 已启动"),
+                            Err(e) => log::error!("启动 daemon 失败: {}", e),
                         }
+                    } else {
+                        log::info!("daemon 已在运行（PID 存活）");
+                    }
+                    // 2. 等待 RPC 就绪（最多 5 秒）
+                    let mut ready = false;
+                    for _ in 0..50 {
+                        if crate::daemon::rpc_client::ping().await.is_ok() {
+                            ready = true;
+                            break;
+                        }
+                        tokio::time::sleep(Duration::from_millis(100)).await;
+                    }
+                    if ready {
+                        log::info!("daemon RPC 就绪");
+                        // 3. 初始同步：状态 → GUI + 托盘
+                        let status = get_status(handle.clone()).await;
+                        let state: State<'_, AppState> = handle.state();
+                        *state.connection.write() = status.clone();
+                        let _ = tray::update_tray_status(&handle, &status);
+                        // 4. 状态轮询（3 秒）：daemon 状态 → GUI 内存 + 托盘
+                        loop {
+                            tokio::time::sleep(Duration::from_secs(3)).await;
+                            let status = get_status(handle.clone()).await;
+                            let state: State<'_, AppState> = handle.state();
+                            *state.connection.write() = status.clone();
+                            let _ = tray::update_tray_status(&handle, &status);
+                        }
+                    } else {
+                        log::error!("daemon RPC 未就绪（5 秒超时）");
                     }
                 });
             }
 
-            // F2：FTP 随应用启动（打开 VNT GUI 即自动启动 FTP 服务）
+            // F2：FTP 随应用启动（打开 VNT GUI 即自动启动 FTP 服务）—— 经 daemon
             {
                 let config_dir = config::get_config_path()
                     .parent()
@@ -791,7 +829,7 @@ pub fn run() {
                 if ftp_cfg.auto_start_with_app && ftp_cfg.enabled {
                     let handle = app.handle().clone();
                     tauri::async_runtime::spawn(async move {
-                        tokio::time::sleep(Duration::from_secs(3)).await;
+                        tokio::time::sleep(Duration::from_secs(4)).await;
                         let cfg = {
                             let state: State<'_, AppState> = handle.state();
                             let mut c = ftp::config::load_ftp_config(&state.config_dir);
@@ -802,7 +840,7 @@ pub fn run() {
                             }
                             c
                         };
-                        if let Err(e) = ftp::server::start_ftp(cfg).await {
+                        if let Err(e) = crate::daemon::rpc_client::ftp_start(cfg).await {
                             log::error!("FTP 随应用自启失败: {}", e);
                         }
                     });

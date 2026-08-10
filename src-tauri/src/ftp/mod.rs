@@ -32,27 +32,55 @@ fn load_current(app: &AppHandle) -> config::FtpConfig {
     cfg
 }
 
-/// 启动 FTP 服务（F1）
+/// 启动 FTP 服务（F1）—— 经 daemon RPC 管理
 #[tauri::command]
 pub async fn ftp_start(app: AppHandle) -> Result<(), String> {
+    let state: State<'_, AppState> = app.state();
     let cfg = load_current(&app);
     if !cfg.enabled {
-        // 总开关关闭时不允许启动
         return Err("FTP 服务总开关未开启".to_string());
     }
-    server::start_ftp(cfg).await
+    let _ = state;
+    crate::daemon::rpc_client::ftp_start(cfg).await
 }
 
-/// 停止 FTP 服务（F1）
+/// 停止 FTP 服务（F1）—— 经 daemon RPC 管理
 #[tauri::command]
 pub async fn ftp_stop() -> Result<(), String> {
-    server::stop_ftp().await
+    crate::daemon::rpc_client::ftp_stop().await
 }
 
-/// FTP 服务状态（F8：已停止 / 运行中 / 异常 + 监听地址）
+/// FTP 服务状态（F8：已停止 / 运行中 / 异常 + 监听地址）—— daemon 状态映射
 #[tauri::command]
-pub fn ftp_status() -> server::FtpServerStatus {
-    server::ftp_status()
+pub async fn ftp_status(app: AppHandle) -> server::FtpServerStatus {
+    use crate::daemon::rpc_protocol::DaemonResponse;
+    match crate::daemon::rpc_client::get_state().await {
+        Ok(DaemonResponse::State {
+            ftp_running,
+            ftp_config,
+            ..
+        }) => {
+            if ftp_running {
+                let port = ftp_config.map(|c| c.port).unwrap_or(2121);
+                server::FtpServerStatus {
+                    state: "running".to_string(),
+                    listen_addr: Some(format!("0.0.0.0:{}", port)),
+                    error: None,
+                }
+            } else {
+                server::FtpServerStatus {
+                    state: "stopped".to_string(),
+                    listen_addr: None,
+                    error: None,
+                }
+            }
+        }
+        _ => {
+            // daemon 不可达 → 本地缓存状态（服务实际在 daemon 中）
+            let _ = app;
+            server::ftp_status()
+        }
+    }
 }
 
 /// 获取 FTP 配置（密码不回传：password 字段为空）
@@ -145,10 +173,13 @@ pub async fn ftp_pick_root_dir(app: AppHandle) -> Result<String, String> {
     }
 }
 
-/// 获取 FTP 连接日志（F9）
+/// 获取 FTP 连接日志（F9）—— 经 daemon RPC
 #[tauri::command]
-pub fn ftp_get_logs() -> Vec<log::FtpLogEntry> {
-    log::get_logs()
+pub async fn ftp_get_logs() -> Vec<log::FtpLogEntry> {
+    match crate::daemon::rpc_client::ftp_get_logs().await {
+        Ok(logs) => logs,
+        Err(_) => Vec::new(),
+    }
 }
 
 /// 获取所有监听地址（Bug 3）：遍历活跃网卡 IPv4 + 端口，如 ["192.168.1.100:2121", "10.26.0.3:2121", "127.0.0.1:2121"]
