@@ -36,6 +36,8 @@ export function RemoteCanvas() {
   const [attempt, setAttempt] = useState(0);
   // 当前 decoder 是否已触发 error（error 后 decoder 自动 closed，只推进一次组合）
   const erroredRef = useRef(false);
+  // 新解码器是否已收到关键帧：必须从关键帧开始解码（delta 帧无参考帧会解码失败）
+  const gotKeyframeRef = useRef(false);
   // 会话状态：disconnected → sharing 等变化时重建解码器（二次连接/重连黑屏防御）
   const sessionType = useDesktopStore((s) => s.session.state.type);
 
@@ -104,6 +106,8 @@ export function RemoteCanvas() {
 
     decoderRef.current = dec;
     setDecoderError(null);
+    // 新解码器必须等待关键帧才能开始解码
+    gotKeyframeRef.current = false;
 
     return () => {
       // error 后 decoder 已自动进入 closed 状态，close() 会抛 InvalidStateError → 必须先判状态
@@ -127,6 +131,13 @@ export function RemoteCanvas() {
     channel.onmessage = (payload) => {
       const d = decoderRef.current;
       if (!d || d.state !== 'configured') return;
+      // 新解码器必须从关键帧开始：跳过关键帧前的 delta，避免无参考帧解码失败触发错误回退
+      if (!gotKeyframeRef.current) {
+        if (!payload.header.is_keyframe) {
+          return;
+        }
+        gotKeyframeRef.current = true;
+      }
       try {
         const bytes =
           payload.data instanceof Uint8Array
