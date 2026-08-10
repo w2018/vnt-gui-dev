@@ -2,24 +2,27 @@
 
 use std::fs;
 use std::path::PathBuf;
-use std::sync::OnceLock;
+use std::sync::Mutex;
 
-/// 数据目录（与 GUI 配置同源：%APPDATA%\vnt-gui）；测试可注入
-static DATA_DIR: OnceLock<PathBuf> = OnceLock::new();
+/// 数据目录（与 GUI 配置同源：%APPDATA%\vnt-gui）；测试可注入（每次覆盖，
+/// 配合 DATA_DIR_LOCK 串行；OnceLock 会让后续测试静默失败导致 flaky）
+static DATA_DIR: Mutex<Option<PathBuf>> = Mutex::new(None);
 
 /// 测试互斥锁：set_data_dir 是全局状态，daemon 相关测试必须串行
+#[cfg(test)]
 pub(crate) static DATA_DIR_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// 设置数据目录（默认 %APPDATA%\vnt-gui；测试注入临时目录）
 pub fn set_data_dir(dir: PathBuf) {
-    let _ = DATA_DIR.set(dir);
+    *DATA_DIR.lock().unwrap() = Some(dir);
 }
 
 /// 数据目录
 pub fn daemon_data_dir() -> PathBuf {
     DATA_DIR
-        .get()
-        .cloned()
+        .lock()
+        .unwrap()
+        .clone()
         .unwrap_or_else(|| {
             dirs::config_dir()
                 .unwrap_or_else(|| PathBuf::from("."))

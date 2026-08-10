@@ -1,16 +1,14 @@
 //! FTP 认证：自定义 Authenticator + UserDetail + UserDetailProvider
 //!
-//! 密码校验使用 argon2（与存储哈希匹配）；内存中的用户表与 config/storage 共享。
-//! 登录成功/失败同时写入连接日志（F9）。
+//! 密码校验：keyring（DPAPI）中存明文密码，解密后与客户端输入**直接比较**
+//! （用户指示，无需 argon2）；内存中的用户表与 config/storage 共享。
+//! 登录成功/失败同时写入连接日志（F9）与 daemon 日志（2E 诊断增强）。
 
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use argon2::password_hash::{PasswordHash, PasswordHasher, SaltString};
-use argon2::{Argon2, PasswordVerifier};
 use parking_lot::RwLock;
-use rand_core::OsRng;
 use unftp_core::auth::{AuthenticationError, Authenticator, Principal, UserDetail, UserDetailError, UserDetailProvider};
 use unftp_core::auth::Credentials;
 
@@ -43,7 +41,7 @@ impl fmt::Display for FtpUserDetail {
 }
 
 /// 内存用户表（authenticator / user_detail_provider / storage 共享）
-/// password 字段为 argon2 哈希（来源 keyring）
+/// password 字段为明文密码（来源 keyring，DPAPI 解密）
 #[derive(Debug, Default)]
 pub struct UserStore {
     pub users: Vec<FtpUser>,
@@ -63,7 +61,7 @@ impl UserStore {
     }
 }
 
-/// 自定义 Authenticator：argon2 校验密码
+/// 自定义 Authenticator：明文密码直接比较（keyring 解密后即明文）
 #[derive(Debug)]
 pub struct FtpAuthenticator {
     store: Arc<RwLock<UserStore>>,
@@ -78,8 +76,19 @@ impl FtpAuthenticator {
 #[async_trait::async_trait]
 impl Authenticator for FtpAuthenticator {
     async fn authenticate(&self, username: &str, creds: &Credentials) -> Result<Principal, AuthenticationError> {
-        // 诊断日志：认证尝试（用户名 + 来源 IP）
-        ::log::info!("FTP 认证尝试: user={}, ip={}", username, creds.source_ip);
+        // 2E 诊断日志：认证尝试（用户名 + 来源 IP + 内存中是否持有密码）
+        let has_pwd = self
+            .store
+            .read()
+            .find(username)
+            .map(|u| !u.password.is_empty())
+            .unwrap_or(false);
+        ::log::info!(
+            "FTP auth attempt: user={}, ip={}, has_password_in_memory={}",
+            username,
+            creds.source_ip,
+            has_pwd
+        );
 
         let store = self.store.read();
         let Some(user) = store.find(username) else {
@@ -87,19 +96,15 @@ impl Authenticator for FtpAuthenticator {
             ::log::info!("FTP 认证失败: user={}, ip={}, 原因=用户不存在", username, creds.source_ip);
             return Err(AuthenticationError::new("用户名或密码错误"));
         };
-        // 无哈希（keyring 缺失）→ 拒绝
+        // 无密码（keyring 缺失/未回填）→ 拒绝并记录
         if user.password.is_empty() {
             log::push_log(creds.source_ip, username, "登录失败", "凭据缺失");
-            ::log::info!("FTP 认证失败: user={}, ip={}, 原因=凭据缺失(keyring 无记录)", username, creds.source_ip);
+            ::log::info!("FTP 认证失败: user={}, ip={}, 原因=凭据缺失(keyring 无记录或未回填)", username, creds.source_ip);
             return Err(AuthenticationError::new("用户名或密码错误"));
         }
-        // argon2 校验（keyring 中存储的是 argon2 哈希，非明文）
+        // 明文直接比较（keyring 解密后即明文）
         let password = creds.password.as_deref().unwrap_or("");
-        let parsed = PasswordHash::new(&user.password).map_err(|_| AuthenticationError::new("凭据损坏"))?;
-        let ok = Argon2::default()
-            .verify_password(password.as_bytes(), &parsed)
-            .is_ok();
-        if ok {
+        if user.password == password {
             log::push_log(creds.source_ip, username, "登录成功", "CONNECT");
             ::log::info!("FTP 认证成功: user={}, ip={}", username, creds.source_ip);
             Ok(Principal {
@@ -142,31 +147,29 @@ impl UserDetailProvider for FtpUserDetailProvider {
     }
 }
 
-/// 对明文密码做 argon2 哈希（保存用户时调用）
-pub fn hash_password(plain: &str) -> Result<String, String> {
-    let salt = SaltString::generate(&mut OsRng);
-    Argon2::default()
-        .hash_password(plain.as_bytes(), &salt)
-        .map(|h| h.to_string())
-        .map_err(|e| format!("密码哈希失败: {}", e))
-}
-
-/// 校验明文密码是否匹配哈希（供测试与鉴权复用）
-pub fn verify_password(plain: &str, hash: &str) -> bool {
-    PasswordHash::new(hash)
-        .map(|parsed| Argon2::default().verify_password(plain.as_bytes(), &parsed).is_ok())
-        .unwrap_or(false)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn test_hash_and_verify_roundtrip() {
-        let hash = hash_password("correct-horse").unwrap();
-        assert!(verify_password("correct-horse", &hash));
-        assert!(!verify_password("wrong", &hash));
+    fn test_plain_password_compare() {
+        // 明文比较：keyring 解密后即明文，直接 ==
+        let mut cfg = FtpConfig::default();
+        cfg.users.push(FtpUser {
+            username: "admin".into(),
+            password: "s3cret".into(),
+            permissions: FtpPermissions::default(),
+        });
+        let store = UserStore::from_config(&cfg);
+        assert_eq!(store.find("admin").unwrap().password, "s3cret");
+        // 空密码用户（keyring 缺失）→ 登录被拒（authenticate 分支）
+        cfg.users.push(FtpUser {
+            username: "nopwd".into(),
+            password: String::new(),
+            permissions: FtpPermissions::default(),
+        });
+        let store = UserStore::from_config(&cfg);
+        assert!(store.find("nopwd").unwrap().password.is_empty());
     }
 
     #[test]

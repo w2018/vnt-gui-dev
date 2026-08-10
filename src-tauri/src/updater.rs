@@ -8,7 +8,6 @@ use std::io::Write;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager};
-use tauri_plugin_shell::ShellExt;
 
 /// GitHub Releases API（文档 §3.9.1）
 /// vnt-cli 上游仓库
@@ -47,12 +46,27 @@ struct GithubAsset {
 }
 
 /// 获取本地 vnt-cli 版本（解析 `--help` 输出中的 version: 行）
+/// Bug 1：不用 tauri sidecar API（无法传 creation_flags 隐藏窗口），
+/// 改为直接定位 resource_dir 下的 vnt-cli.exe + CREATE_NO_WINDOW
 pub async fn local_vnt_version(app: &AppHandle) -> Result<String, String> {
-    let output = app
-        .shell()
-        .sidecar("vnt-cli")
-        .map_err(|e| format!("sidecar 不可用: {}", e))?
-        .args(["--help"])
+    use tauri::Manager;
+    let cli_path = app
+        .path()
+        .resource_dir()
+        .map_err(|e| format!("定位资源目录失败: {}", e))?
+        .join("vnt-cli.exe");
+    if !cli_path.exists() {
+        return Err(format!("vnt-cli 不存在: {}", cli_path.display()));
+    }
+    let mut cmd = tokio::process::Command::new(&cli_path);
+    cmd.arg("--help");
+    cmd.stdout(std::process::Stdio::piped());
+    cmd.stderr(std::process::Stdio::piped());
+    #[cfg(windows)]
+    {
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+    let output = cmd
         .output()
         .await
         .map_err(|e| format!("执行 vnt-cli --help 失败: {}", e))?;

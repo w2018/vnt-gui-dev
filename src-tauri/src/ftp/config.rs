@@ -1,7 +1,8 @@
 //! FTP 服务配置：结构体 + JSON 持久化（%APPDATA%/vnt-gui/ftp_config.json）
 //!
 //! 安全约束：密码**禁止明文落盘**——`FtpUser.password` 标记 `#[serde(skip)]`，
-//! 实际以 argon2 哈希存入系统凭据库（keyring，Windows = DPAPI）。
+//! 实际以明文存入系统凭据库（keyring，Windows = DPAPI 加密），
+//! 认证时从内存用户表直接比较（用户指示：keyring 解密后即明文，无需 argon2）。
 
 use std::path::{Path, PathBuf};
 
@@ -32,12 +33,12 @@ impl FtpPermissions {
 
 /// FTP 用户（username + 权限）
 ///
-/// `password` 字段仅存在于内存（argon2 哈希，来源 keyring），
+/// `password` 字段仅存在于内存（明文，来源 keyring），
 /// 序列化时被 `#[serde(skip)]` 跳过 —— JSON 中绝不出现密码。
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct FtpUser {
     pub username: String,
-    /// 内存中的 argon2 密码哈希（不落盘）；编辑用户不改密码时为空 → 保留旧哈希
+    /// 内存中的明文密码（不落盘，来源 keyring）；编辑用户不改密码时为空 → 保留旧密码
     #[serde(skip)]
     pub password: String,
     pub permissions: FtpPermissions,
@@ -112,15 +113,15 @@ fn keyring_entry(username: &str) -> Result<keyring::Entry, String> {
     keyring::Entry::new(KEYRING_SERVICE, username).map_err(|e| format!("keyring 初始化失败: {}", e))
 }
 
-/// 将密码哈希写入系统凭据库
-pub fn set_password_hash(username: &str, hash: &str) -> Result<(), String> {
+/// 将明文密码写入系统凭据库（Windows = DPAPI 加密存储）
+pub fn set_password(username: &str, password: &str) -> Result<(), String> {
     keyring_entry(username)?
-        .set_password(hash)
+        .set_password(password)
         .map_err(|e| format!("密码存储失败: {}", e))
 }
 
-/// 从系统凭据库读取密码哈希（无条目返回空 → 该用户无法登录）
-pub fn get_password_hash(username: &str) -> Option<String> {
+/// 从系统凭据库读取明文密码（无条目返回 None → 该用户无法登录）
+pub fn get_password(username: &str) -> Option<String> {
     keyring_entry(username)
         .ok()
         .and_then(|e| e.get_password().ok())
@@ -209,5 +210,26 @@ mod tests {
         assert_eq!(loaded.users[0].username, "u1");
         // 密码字段被 skip，roundtrip 后为空
         assert_eq!(loaded.users[0].password, "");
+    }
+
+    #[test]
+    fn test_root_dir_roundtrip() {
+        // Bug 3 验证：ROOT 目录必须持久化（save → load → 一致）
+        let cfg = FtpConfig {
+            enabled: true,
+            auto_start_with_app: true,
+            auto_start_with_system: false,
+            root_dir: r"D:\MyFiles\FTP".to_string(),
+            port: 2121,
+            so_reuseaddr: true,
+            pasv_ports: None,
+            users: vec![],
+        };
+        let dir = tempfile::tempdir().unwrap();
+        save_ftp_config(dir.path(), &cfg).unwrap();
+        let loaded = load_ftp_config(dir.path());
+        assert_eq!(loaded.root_dir, r"D:\MyFiles\FTP");
+        assert_eq!(loaded.enabled, true);
+        assert_eq!(loaded.auto_start_with_app, true);
     }
 }

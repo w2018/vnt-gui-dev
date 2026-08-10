@@ -149,7 +149,7 @@ fn import_configs(path: String) -> Result<Vec<VntConfig>, String> {
 
 /// 获取 ping 目标 host：优先活动配置的服务器地址，其次 daemon 实际连接服务器
 #[tauri::command]
-async fn get_ping_host(app: tauri::AppHandle) -> Option<String> {
+async fn get_ping_host(_app: tauri::AppHandle) -> Option<String> {
     // 1. 活动配置 server_address（去协议前缀/端口）
     if let Some(cfg) = config::load_config_store().get_active() {
         if let Some(server) = &cfg.server_address {
@@ -717,8 +717,9 @@ async fn start_daemon_sidecar(app: &tauri::AppHandle) -> Result<(), String> {
 // ==================== 应用入口 ====================
 
 /// 应用入口
+/// `autostart`: 开机自启模式（--autostart）——不显示主窗口，daemon 恢复服务后最小化到托盘
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
-pub fn run() {
+pub fn run(autostart: bool) {
     env_logger::init();
 
     tauri::Builder::default()
@@ -745,7 +746,7 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
-        .setup(|app| {
+        .setup(move |app| {
             // 全局状态
             let config_dir = config::get_config_path()
                 .parent()
@@ -760,20 +761,23 @@ pub fn run() {
             // 系统托盘
             tray::create_tray(app.handle())?;
 
+            // Bug 4：开机自启模式（--autostart）——不显示主窗口（静默后台运行）
+            if autostart {
+                for window in app.webview_windows().values() {
+                    let _ = window.hide();
+                }
+                log::info!("开机自启模式：主窗口已隐藏，daemon 将按持久化状态恢复服务");
+            }
+
             // 流量监控（每秒采集虚拟网卡统计）
             traffic::start_traffic_monitor(app.handle().clone());
 
-            // 开机自启：延迟 3 秒自动连接（等系统网络就绪）—— 经 daemon
-            let args: Vec<String> = std::env::args().collect();
-            if args.iter().any(|a| a == autostart::AUTOSTART_FLAG) {
-                // 1a：自启启动时按设置隐藏托盘（静默后台运行）
-                if settings::load_settings().hide_tray_on_autostart {
-                    if let Some(tray) = app.tray_by_id(tray::TRAY_ID) {
-                        let _ = tray.set_visible(false);
-                        log::info!("开机自启：按设置隐藏托盘");
-                    }
+            // 自启参数：按设置隐藏托盘（静默后台运行）
+            if autostart && settings::load_settings().hide_tray_on_autostart {
+                if let Some(tray) = app.tray_by_id(tray::TRAY_ID) {
+                    let _ = tray.set_visible(false);
+                    log::info!("开机自启：按设置隐藏托盘");
                 }
-                log::info!("自启参数：daemon 将按持久化状态恢复服务");
             }
 
             // Daemon 生命周期：检测 → 启动（sidecar）→ 状态轮询
@@ -835,7 +839,7 @@ pub fn run() {
                             let mut c = ftp::config::load_ftp_config(&state.config_dir);
                             for user in &mut c.users {
                                 if user.password.is_empty() {
-                                    user.password = ftp::config::get_password_hash(&user.username).unwrap_or_default();
+                                    user.password = ftp::config::get_password(&user.username).unwrap_or_default();
                                 }
                             }
                             c

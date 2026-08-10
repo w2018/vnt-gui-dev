@@ -19,14 +19,14 @@ use tauri_plugin_dialog::DialogExt;
 
 use crate::state::AppState;
 
-/// 读取当前 FTP 配置（含 keyring 密码哈希回填）
+/// 读取当前 FTP 配置（含 keyring 密码回填）
 fn load_current(app: &AppHandle) -> config::FtpConfig {
     let state: State<'_, AppState> = app.state();
     let mut cfg = config::load_ftp_config(&state.config_dir);
-    // 从 keyring 回填密码哈希（登录校验用）
+    // 从 keyring 回填明文密码（登录校验用）
     for user in &mut cfg.users {
         if user.password.is_empty() {
-            user.password = config::get_password_hash(&user.username).unwrap_or_default();
+            user.password = config::get_password(&user.username).unwrap_or_default();
         }
     }
     cfg
@@ -100,32 +100,35 @@ pub fn ftp_get_config(app: AppHandle) -> Result<config::FtpConfig, String> {
 /// 保存 FTP 配置（F4-F7 + F3 联动）
 ///
 /// 密码处理：
-/// - 新密码（password 非空）→ argon2 哈希 → keyring（DPAPI）
-/// - 密码为空（编辑未改密码）→ 保留 keyring 旧哈希
+/// - 新密码（password 非空）→ 明文写入 keyring（DPAPI 加密）
+/// - 密码为空（编辑未改密码）→ 保留 keyring 旧密码
 /// - 被删除的用户 → 同步删除 keyring 条目
-/// 服务运行中保存 → 自动重启使配置生效。
+/// 保存后经 RPC 让 daemon 重启 FTP 使配置生效（ROOT/端口/用户即时更新）。
 #[tauri::command]
 pub async fn ftp_save_config(app: AppHandle, cfg: config::FtpConfig) -> Result<(), String> {
     let state: State<'_, AppState> = app.state();
     let config_dir = state.config_dir.clone();
 
+    // Bug 3：ROOT 目录路径校验（存在性）
+    if !cfg.root_dir.trim().is_empty() && !std::path::Path::new(cfg.root_dir.trim()).is_dir() {
+        return Err(format!("ROOT 目录不存在或不可访问: {}", cfg.root_dir));
+    }
+
     let old = config::load_ftp_config(&config_dir);
     let mut cfg = cfg;
 
-    // 1. 密码哈希处理
+    // 1. 密码处理（明文 → keyring DPAPI）
     for user in &mut cfg.users {
         user.permissions.normalize();
         if user.username.trim().is_empty() {
             return Err("用户名不能为空".to_string());
         }
         if !user.password.is_empty() {
-            // 新密码/修改密码 → 哈希并存入 keyring
-            let hash = auth::hash_password(&user.password)?;
-            config::set_password_hash(&user.username, &hash)?;
-            user.password = hash;
+            // 新密码/修改密码 → 明文写入 keyring
+            config::set_password(&user.username, &user.password)?;
         } else {
-            // 未改密码 → 保留旧哈希（内存中用于校验）
-            user.password = config::get_password_hash(&user.username).unwrap_or_default();
+            // 未改密码 → 保留 keyring 旧密码（内存中用于校验）
+            user.password = config::get_password(&user.username).unwrap_or_default();
         }
     }
     // 2. 被删除用户的 keyring 清理
@@ -135,8 +138,18 @@ pub async fn ftp_save_config(app: AppHandle, cfg: config::FtpConfig) -> Result<(
         }
     }
 
-    // 3. 写盘
+    // 3. 写盘（password 字段 serde(skip) 不落盘）
     config::save_ftp_config(&config_dir, &cfg)?;
+
+    // Bug 3：回读验证 —— 持久化 roundtrip 一致性
+    let reloaded = config::load_ftp_config(&config_dir);
+    if reloaded.root_dir != cfg.root_dir {
+        return Err(format!("ROOT 目录持久化失败: roundtrip mismatch ({:?} != {:?})", reloaded.root_dir, cfg.root_dir));
+    }
+    if reloaded.port != cfg.port || reloaded.users.len() != cfg.users.len() {
+        return Err("FTP 配置持久化失败: roundtrip mismatch".to_string());
+    }
+    ::log::info!("FTP 配置已保存并回读验证: root_dir={}, port={}, users={}", cfg.root_dir, cfg.port, cfg.users.len());
 
     // 4. F3 联动：随系统开机自启（复用 tauri-plugin-autostart）
     let current = app.autolaunch().is_enabled().unwrap_or(false);
@@ -148,15 +161,17 @@ pub async fn ftp_save_config(app: AppHandle, cfg: config::FtpConfig) -> Result<(
         }
     }
 
-    // 5. 运行中 → 自动重启使配置生效
-    let (user_count, port) = (cfg.users.len(), cfg.port);
-    if server::ftp_status().state == "running" {
-        server::stop_ftp().await?;
+    // 5. 运行中 → 经 RPC 让 daemon 重启使配置生效（daemon 架构：FTP 在 daemon 进程内）
+    if crate::daemon::rpc_client::ping().await.is_ok() {
         if cfg.enabled {
-            server::start_ftp(cfg).await?;
+            crate::daemon::rpc_client::ftp_start(cfg.clone()).await?;
+        } else {
+            crate::daemon::rpc_client::ftp_stop().await?;
         }
+    } else {
+        // daemon 不可达：仅持久化，返回提示（不阻塞保存）
+        ::log::warn!("daemon 不可达，FTP 配置已保存但未生效（daemon 下次启动时加载）");
     }
-    ::log::info!("FTP 配置已保存（{} 个用户，端口 {}）", user_count, port);
     Ok(())
 }
 /// 选择 ROOT 目录（F4：系统文件夹选择器）

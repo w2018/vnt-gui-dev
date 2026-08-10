@@ -10,6 +10,11 @@ use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
 
+// Bug 1：spawn 子进程时隐藏控制台窗口（否则 daemon 每次 spawn 都弹黑框）
+// 注：tokio::process::Command 的 creation_flags 是固有方法，无需导入 CommandExt
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::Mutex;
@@ -161,6 +166,8 @@ async fn run_vnt_with_supervision(
         cmd.args(build_args(&config));
         cmd.stdout(Stdio::piped());
         cmd.stderr(Stdio::piped());
+        #[cfg(windows)]
+        cmd.creation_flags(CREATE_NO_WINDOW);
 
         let mut child = match cmd.spawn() {
             Ok(c) => c,
@@ -321,19 +328,19 @@ async fn poll_loop(state: Arc<Mutex<RuntimeState>>, config: VntConfig) {
 }
 
 /// 运行一次性 vnt-cli 命令（--list / --info），返回输出文本
+/// Bug 1：CREATE_NO_WINDOW 隐藏控制台（轮询每 10s spawn，不能弹框）
 async fn run_cli(args: &[&str]) -> Result<String, String> {
     let path = vnt_cli_path()?;
-    let output = tokio::time::timeout(
-        Duration::from_secs(8),
-        Command::new(&path)
-            .args(args)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .output(),
-    )
-    .await
-    .map_err(|_| "vnt-cli 命令超时".to_string())?
-    .map_err(|e| format!("vnt-cli 执行失败: {}", e))?;
+    let mut cmd = Command::new(&path);
+    cmd.args(args);
+    cmd.stdout(Stdio::piped());
+    cmd.stderr(Stdio::piped());
+    #[cfg(windows)]
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    let output = tokio::time::timeout(Duration::from_secs(8), cmd.output())
+        .await
+        .map_err(|_| "vnt-cli 命令超时".to_string())?
+        .map_err(|e| format!("vnt-cli 执行失败: {}", e))?;
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
     if stdout.trim().is_empty() {
@@ -371,11 +378,12 @@ fn extract_server_addr(line: &str) -> Option<String> {
 /// 兜底：杀掉所有 vnt-cli 进程（主动停止时确保清理）
 #[cfg(windows)]
 async fn kill_vnt_cli_process() -> Result<(), String> {
-    tokio::process::Command::new("taskkill")
-        .args(["/F", "/IM", "vnt-cli.exe"])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
+    let mut cmd = tokio::process::Command::new("taskkill");
+    cmd.args(["/F", "/IM", "vnt-cli.exe"]);
+    cmd.stdout(Stdio::null());
+    cmd.stderr(Stdio::null());
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    cmd.status()
         .await
         .map(|_| ())
         .map_err(|e| format!("taskkill 失败: {}", e))
@@ -452,5 +460,19 @@ mod tests {
             Some("10.26.0.3".to_string())
         );
         assert_eq!(parse_virtual_ip("nothing"), None);
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn test_vnt_list_no_window() {
+        // Bug 1 验证：CREATE_NO_WINDOW spawn 正常执行（无控制台窗口）
+        let mut cmd = tokio::process::Command::new("cmd");
+        cmd.args(["/c", "echo hello"]);
+        cmd.stdout(Stdio::piped());
+        cmd.stderr(Stdio::piped());
+        cmd.creation_flags(CREATE_NO_WINDOW);
+        let output = cmd.output().await.expect("failed to spawn");
+        assert!(output.status.success());
+        assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "hello");
     }
 }

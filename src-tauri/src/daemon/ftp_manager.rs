@@ -12,11 +12,11 @@ use crate::ftp::config::{self, FtpConfig};
 
 /// 启动 FTP（复用 ftp::server::start_ftp；密码从 keyring 回填）
 pub async fn start(state: Arc<Mutex<RuntimeState>>, config: FtpConfig) -> Result<(), String> {
-    // 从 keyring 回填密码哈希（RPC 传输不含密码）
+    // 从 keyring 回填明文密码（RPC 传输不含密码）
     let mut cfg = config.clone();
     for user in &mut cfg.users {
         if user.password.is_empty() {
-            user.password = config::get_password_hash(&user.username).unwrap_or_default();
+            user.password = config::get_password(&user.username).unwrap_or_default();
         }
     }
     crate::ftp::server::start_ftp(cfg).await?;

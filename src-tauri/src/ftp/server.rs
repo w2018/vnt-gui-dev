@@ -246,7 +246,6 @@ pub fn listen_addr() -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ftp::auth::hash_password;
     use crate::ftp::config::{FtpPermissions, FtpUser};
 
     fn test_cfg(root: &Path, port: u16) -> FtpConfig {
@@ -260,7 +259,7 @@ mod tests {
             pasv_ports: None,
             users: vec![FtpUser {
                 username: "tester".into(),
-                password: hash_password("test-pass").unwrap(),
+                password: "test-pass".into(),
                 permissions: FtpPermissions {
                     upload: true,
                     download: true,

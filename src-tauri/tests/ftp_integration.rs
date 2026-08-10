@@ -31,11 +31,10 @@ fn build_config(root: &std::path::Path, users: Vec<FtpUser>) -> FtpConfig {
 }
 
 fn admin_user() -> FtpUser {
-    // 直接注入 argon2 哈希（绕过 keyring，测试环境无凭据库）
-    let hash = vnt_gui_lib::ftp::auth::hash_password("admin123").unwrap();
+    // 明文密码（keyring DPAPI 语义，认证直接比较）
     FtpUser {
         username: "admin".into(),
-        password: hash,
+        password: "admin123".into(),
         permissions: FtpPermissions {
             upload: true,
             download: true,
@@ -46,10 +45,10 @@ fn admin_user() -> FtpUser {
 }
 
 fn readonly_user() -> FtpUser {
-    let hash = vnt_gui_lib::ftp::auth::hash_password("read123").unwrap();
+    // 明文密码（keyring DPAPI 语义，认证直接比较）
     FtpUser {
         username: "reader".into(),
-        password: hash,
+        password: "read123".into(),
         permissions: FtpPermissions {
             upload: false,
             download: true,
@@ -60,10 +59,10 @@ fn readonly_user() -> FtpUser {
 }
 
 fn nodelete_user() -> FtpUser {
-    let hash = vnt_gui_lib::ftp::auth::hash_password("dl123").unwrap();
+    // 明文密码（keyring DPAPI 语义，认证直接比较）
     FtpUser {
         username: "nodelete".into(),
-        password: hash,
+        password: "dl123".into(),
         permissions: FtpPermissions {
             upload: true,
             download: true,
