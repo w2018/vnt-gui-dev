@@ -69,13 +69,14 @@ async fn restore_services(state: Arc<Mutex<state_store::RuntimeState>>) {
         }
     }
     // FTP：上次在运行且随应用自启（或总开关开启）→ 自动拉起
+    // 密码来源：daemon 侧 keyring（start 时已写入）；读不到 → 明确报错不静默
     {
         let s = state.lock().await;
         if s.ftp_was_running {
             if let Some(cfg) = s.ftp_config.clone() {
                 if cfg.auto_start_with_app || cfg.enabled {
                     drop(s);
-                    if let Err(e) = vnt_gui_lib::daemon::ftp_manager::start(state.clone(), cfg).await {
+                    if let Err(e) = vnt_gui_lib::daemon::ftp_manager::start_restored(state.clone(), cfg).await {
                         tracing::error!("恢复 FTP 失败: {}", e);
                     } else {
                         tracing::info!("已恢复 FTP 服务");

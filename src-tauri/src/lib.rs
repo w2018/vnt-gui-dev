@@ -834,18 +834,29 @@ pub fn run(autostart: bool) {
                     let handle = app.handle().clone();
                     tauri::async_runtime::spawn(async move {
                         tokio::time::sleep(Duration::from_secs(4)).await;
-                        let cfg = {
+                        let rpc_cfg = {
                             let state: State<'_, AppState> = handle.state();
                             let mut c = ftp::config::load_ftp_config(&state.config_dir);
                             for user in &mut c.users {
                                 if user.password.is_empty() {
-                                    user.password = ftp::config::get_password(&user.username).unwrap_or_default();
+                                    match ftp::config::get_password(&user.username) {
+                                        Some(pwd) => user.password = pwd,
+                                        None => log::warn!(
+                                            "FTP 自启：用户 {} 密码在凭据库中不存在（keyring 读取失败）",
+                                            user.username
+                                        ),
+                                    }
                                 }
                             }
-                            c
+                            ftp::to_rpc_cfg(&c)
                         };
-                        if let Err(e) = crate::daemon::rpc_client::ftp_start(cfg).await {
-                            log::error!("FTP 随应用自启失败: {}", e);
+                        match rpc_cfg {
+                            Ok(cfg) => {
+                                if let Err(e) = crate::daemon::rpc_client::ftp_start(cfg).await {
+                                    log::error!("FTP 随应用自启失败: {}", e);
+                                }
+                            }
+                            Err(e) => log::error!("FTP 随应用自启失败: {}", e),
                         }
                     });
                 }

@@ -99,8 +99,8 @@ pub async fn vnt_restart(config: crate::config::VntConfig) -> Result<(), String>
         .map(|_| ())
 }
 
-/// 启动 FTP
-pub async fn ftp_start(config: crate::ftp::config::FtpConfig) -> Result<(), String> {
+/// 启动 FTP（密码经 FtpConfigWithSecrets 传输，daemon 不跨进程读 keyring）
+pub async fn ftp_start(config: crate::daemon::rpc_protocol::FtpConfigWithSecrets) -> Result<(), String> {
     send_request(DaemonRequest::FtpStart { config })
         .await?
         .into_result()
@@ -115,8 +115,8 @@ pub async fn ftp_stop() -> Result<(), String> {
         .map(|_| ())
 }
 
-/// 重启 FTP
-pub async fn ftp_restart(config: crate::ftp::config::FtpConfig) -> Result<(), String> {
+/// 重启 FTP（密码经 FtpConfigWithSecrets 传输，daemon 不跨进程读 keyring）
+pub async fn ftp_restart(config: crate::daemon::rpc_protocol::FtpConfigWithSecrets) -> Result<(), String> {
     send_request(DaemonRequest::FtpRestart { config })
         .await?
         .into_result()

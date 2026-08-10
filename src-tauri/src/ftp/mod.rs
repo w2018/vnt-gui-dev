@@ -17,22 +17,62 @@ use tauri::{AppHandle, Manager, State};
 use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_dialog::DialogExt;
 
+use crate::daemon::rpc_protocol::{FtpConfigWithSecrets, FtpUserWithPassword};
 use crate::state::AppState;
 
 /// 读取当前 FTP 配置（含 keyring 密码回填）
+///
+/// 禁止静默吞掉 keyring 读取失败：密码缺失必须明确暴露（见 to_rpc_cfg）。
 fn load_current(app: &AppHandle) -> config::FtpConfig {
     let state: State<'_, AppState> = app.state();
     let mut cfg = config::load_ftp_config(&state.config_dir);
     // 从 keyring 回填明文密码（登录校验用）
     for user in &mut cfg.users {
         if user.password.is_empty() {
-            user.password = config::get_password(&user.username).unwrap_or_default();
+            match config::get_password(&user.username) {
+                Some(pwd) => user.password = pwd,
+                None => {
+                    ::log::warn!(
+                        "FTP 用户 {} 的密码在凭据库中不存在（keyring 读取失败或未设置）",
+                        user.username
+                    );
+                }
+            }
         }
     }
     cfg
 }
 
-/// 启动 FTP 服务（F1）—— 经 daemon RPC 管理
+/// 将内存中的 FtpConfig（含密码）转换为 RPC 传输结构
+///
+/// 任一用户密码为空 → 明确报错（不允许静默以空密码启动导致"凭据缺失"）
+pub(crate) fn to_rpc_cfg(cfg: &config::FtpConfig) -> Result<FtpConfigWithSecrets, String> {
+    let mut users = Vec::with_capacity(cfg.users.len());
+    for user in &cfg.users {
+        if user.password.is_empty() {
+            return Err(format!(
+                "用户 {} 的密码在凭据库中不存在，请重新设置密码后再启动 FTP",
+                user.username
+            ));
+        }
+        users.push(FtpUserWithPassword {
+            username: user.username.clone(),
+            password: user.password.clone(),
+            permissions: user.permissions.clone(),
+        });
+    }
+    Ok(FtpConfigWithSecrets {
+        enabled: cfg.enabled,
+        auto_start_with_app: cfg.auto_start_with_app,
+        root_dir: cfg.root_dir.clone(),
+        port: cfg.port,
+        so_reuseaddr: cfg.so_reuseaddr,
+        pasv_ports: cfg.pasv_ports,
+        users,
+    })
+}
+
+/// 启动 FTP 服务（F1）—— 经 daemon RPC 管理（密码随 RPC 传输，daemon 不跨进程读 keyring）
 #[tauri::command]
 pub async fn ftp_start(app: AppHandle) -> Result<(), String> {
     let state: State<'_, AppState> = app.state();
@@ -40,8 +80,9 @@ pub async fn ftp_start(app: AppHandle) -> Result<(), String> {
     if !cfg.enabled {
         return Err("FTP 服务总开关未开启".to_string());
     }
+    let rpc_cfg = to_rpc_cfg(&cfg)?;
     let _ = state;
-    crate::daemon::rpc_client::ftp_start(cfg).await
+    crate::daemon::rpc_client::ftp_start(rpc_cfg).await
 }
 
 /// 停止 FTP 服务（F1）—— 经 daemon RPC 管理
@@ -161,10 +202,11 @@ pub async fn ftp_save_config(app: AppHandle, cfg: config::FtpConfig) -> Result<(
         }
     }
 
-    // 5. 运行中 → 经 RPC 让 daemon 重启使配置生效（daemon 架构：FTP 在 daemon 进程内）
+    // 5. 运行中 → 经 RPC 让 daemon 重启使配置生效（密码随 RPC 传输）
     if crate::daemon::rpc_client::ping().await.is_ok() {
         if cfg.enabled {
-            crate::daemon::rpc_client::ftp_start(cfg.clone()).await?;
+            let rpc_cfg = to_rpc_cfg(&cfg)?;
+            crate::daemon::rpc_client::ftp_start(rpc_cfg).await?;
         } else {
             crate::daemon::rpc_client::ftp_stop().await?;
         }
