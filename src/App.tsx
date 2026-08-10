@@ -28,6 +28,8 @@ import { FirstRunWizard } from './components/FirstRunWizard';
 import { SettingsPanel } from './components/SettingsPanel';
 import { FtpService } from './pages/FtpService';
 import { DesktopShare } from './pages/DesktopShare';
+import { ConnectionRequest } from './components/desktop/ConnectionRequest';
+import { useDesktopStore } from './stores/useDesktopStore';
 import { useConfigStore } from './stores/configStore';
 import { useConnectionStore } from './stores/connectionStore';
 import { useTrafficStore } from './stores/trafficStore';
@@ -164,6 +166,19 @@ export default function App() {
     });
   }, []);
 
+  // 桌面共享事件全局监听：任意页面/应用后台都能收到连接请求 → 全局授权弹窗
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    (async () => {
+      try {
+        unlisten = await useDesktopStore.getState().setupListeners();
+      } catch {
+        // 监听注册失败不阻塞应用其他功能
+      }
+    })();
+    return () => unlisten?.();
+  }, []);
+
   return (
     <ErrorBoundary>
       <Layout style={{ minHeight: '100vh' }}>
@@ -204,6 +219,8 @@ export default function App() {
         <FirstRunWizard />
       </Layout.Content>
       </Layout>
+      {/* 桌面共享授权弹窗：全局渲染，任意页面/后台均可见 */}
+      <ConnectionRequest />
     </ErrorBoundary>
   );
 }

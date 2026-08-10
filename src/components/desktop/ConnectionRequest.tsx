@@ -1,6 +1,6 @@
 // 连接确认弹窗（被控端收到请求时）
 
-import { Button, Checkbox, Modal, Space, Typography } from 'antd';
+import { Button, Checkbox, Modal, Space, Typography, message } from 'antd';
 import { useState } from 'react';
 import { useDesktopStore } from '../../stores/useDesktopStore';
 
@@ -10,7 +10,6 @@ export function ConnectionRequest() {
   const { pendingRequest, acceptRequest, rejectRequest } = useDesktopStore();
   const [grantMouse, setGrantMouse] = useState(true);
   const [grantKeyboard, setGrantKeyboard] = useState(true);
-  const [grantClipboard, setGrantClipboard] = useState(true);
   const [viewOnly, setViewOnly] = useState(false);
 
   const visible = !!pendingRequest;
@@ -19,13 +18,19 @@ export function ConnectionRequest() {
     acceptRequest({
       mouse: grantMouse && !viewOnly,
       keyboard: grantKeyboard && !viewOnly,
-      clipboard: grantClipboard,
+      clipboard: false, // 剪贴板同步已移除
       viewOnly,
-    }).catch((e) => console.error(e));
+    }).catch((e) => {
+      console.error(e);
+      message.error(`接受连接失败: ${String(e)}`);
+    });
   };
 
   const handleReject = () => {
-    rejectRequest('用户拒绝连接请求').catch((e) => console.error(e));
+    rejectRequest('用户拒绝连接请求').catch((e) => {
+      console.error(e);
+      message.error(`拒绝连接失败: ${String(e)}`);
+    });
   };
 
   return (
@@ -76,12 +81,6 @@ export function ConnectionRequest() {
                 disabled={viewOnly}
               >
                 允许键盘控制
-              </Checkbox>
-              <Checkbox
-                checked={grantClipboard}
-                onChange={(e) => setGrantClipboard(e.target.checked)}
-              >
-                允许剪贴板同步
               </Checkbox>
               <Checkbox
                 checked={viewOnly}

@@ -218,8 +218,9 @@ pub async fn desktop_accept_request(
 
     // 启动被控端接收循环（输入模拟 / 剪贴板 / 控制消息）
     spawn_host_loops(state.inner(), &app, conn, granted).await;
-    // 自动开始屏幕共享
-    start_capture(&state).await?;
+    // 自动开始屏幕共享：先清理可能残留的旧采集任务（对方断开未及时清理的兜底），再启动新采集
+    stop_capture(state.inner()).await;
+    start_capture(state.inner()).await?;
     emit_session(&app, &state).await;
     Ok(())
 }
@@ -245,7 +246,9 @@ pub async fn desktop_disconnect(app: AppHandle, reason: String) -> Result<(), St
     let state = app
         .try_state::<Arc<DesktopState>>()
         .ok_or_else(|| "桌面共享未初始化，请确认 VNT 已连接后重试".to_string())?;
-    stop_capture(&state).await;
+    stop_capture(state.inner()).await;
+    // 清空视频通道引用：避免旧会话 channel 残留影响下次连接（二次连接黑屏防御）
+    *state.video_channel.lock().await = None;
     state.session.disconnect(&reason).await;
     abort_loops(&state).await;
     emit_session(&app, &state).await;
@@ -258,18 +261,24 @@ pub async fn desktop_start_sharing(app: AppHandle) -> Result<(), String> {
     let state = app
         .try_state::<Arc<DesktopState>>()
         .ok_or_else(|| "桌面共享未初始化，请确认 VNT 已连接后重试".to_string())?;
-    start_capture(&state).await?;
+    // 手动开始共享：先清理可能残留的旧采集任务，再启动
+    stop_capture(state.inner()).await;
+    start_capture(state.inner()).await?;
     emit_session(&app, &state).await;
     Ok(())
 }
 
-/// 停止共享屏幕
+/// 停止共享屏幕：结束本次共享会话（停止采集 + 断开连接 + 中止后台循环）
+/// 若只停采集，session.state 仍为 sharing，前端"停止共享"看起来无效
 #[tauri::command]
 pub async fn desktop_stop_sharing(app: AppHandle) -> Result<(), String> {
     let state = app
         .try_state::<Arc<DesktopState>>()
         .ok_or_else(|| "桌面共享未初始化，请确认 VNT 已连接后重试".to_string())?;
-    stop_capture(&state).await;
+    stop_capture(state.inner()).await;
+    state.session.disconnect("用户停止共享").await;
+    abort_loops(&state).await;
+    *state.video_channel.lock().await = None;
     emit_session(&app, &state).await;
     Ok(())
 }
@@ -342,6 +351,16 @@ async fn accept_loop(state: Arc<DesktopState>, app: AppHandle) {
     loop {
         match state.session.handle_incoming().await {
             Ok(Some(info)) => {
+                // 被控端关闭"允许被控制" → 直接拒绝，不打扰用户（弹窗仅当允许被控时出现）
+                if !state.config.lock().await.allow_be_controlled {
+                    log::info!(
+                        "被控端已关闭允许被控制，拒绝 {} 的连接请求",
+                        info.device_name
+                    );
+                    let _ = state.session.reject_pending("被控端已关闭允许被控制").await;
+                    emit_session(&app, &state).await;
+                    continue;
+                }
                 let timeout_secs = state.config.lock().await.confirm_timeout_secs;
                 let _ = app.emit("desktop-connect-request", &info);
                 log::info!("收到连接请求: {} ({})", info.device_name, info.client_node_id);
@@ -397,11 +416,15 @@ async fn spawn_controller_loops(
                     s.session
                         .disconnect(&format!("对方已断开: {}", reason))
                         .await;
+                    // 对方主动断开：清理本机采集/发送任务，否则重连时 start_capture 跳过导致黑屏
+                    stop_capture(&s).await;
                     break;
                 }
                 Ok(_) => {}
                 Err(e) => {
                     log::info!("接收循环结束: {}", e);
+                    // 连接异常结束：同样清理采集/发送任务
+                    stop_capture(&s).await;
                     break;
                 }
             }
@@ -474,11 +497,15 @@ async fn spawn_host_loops(
                     s.session
                         .disconnect(&format!("对方已断开: {}", reason))
                         .await;
+                    // 对方主动断开：清理本机采集/发送任务，否则重连时 start_capture 跳过导致黑屏
+                    stop_capture(&s).await;
                     break;
                 }
                 Ok(_) => {}
                 Err(e) => {
                     log::info!("接收循环结束: {}", e);
+                    // 连接异常结束：同样清理采集/发送任务
+                    stop_capture(&s).await;
                     break;
                 }
             }
@@ -489,7 +516,7 @@ async fn spawn_host_loops(
 }
 
 /// 启动屏幕捕获 + 视频发送（DXGI 捕获 + MF 编码，零 ffmpeg 依赖）
-async fn start_capture(state: &State<'_, Arc<DesktopState>>) -> Result<(), String> {
+async fn start_capture(state: &Arc<DesktopState>) -> Result<(), String> {
     if state.capture_task.lock().await.is_some() {
         return Ok(()); // 已在捕获
     }
@@ -510,8 +537,8 @@ async fn start_capture(state: &State<'_, Arc<DesktopState>>) -> Result<(), Strin
         monitor: cfg.capture.monitor,
         fps: cfg.capture.fps,
         bitrate: cfg.capture.bitrate_kbps * 1000,
-        width: 0,  // 暂不支持缩放，捕获原生分辨率
-        height: 0,
+        width: cfg.capture.width,   // 目标输出宽度（0 = 原分辨率；缩放由 capture_loop 处理）
+        height: cfg.capture.height, // 目标输出高度
         quality: mf_quality,
     };
 
@@ -537,14 +564,20 @@ async fn start_capture(state: &State<'_, Arc<DesktopState>>) -> Result<(), Strin
     Ok(())
 }
 
-/// 停止捕获与发送（先断开 rx 使捕获线程自然退出，再 join）
-async fn stop_capture(state: &State<'_, Arc<DesktopState>>) {
+/// 停止捕获与发送（先断开 rx 使捕获线程自然退出，再等待退出）
+async fn stop_capture(state: &Arc<DesktopState>) {
     if let Some(t) = state.send_task.lock().await.take() {
         t.abort();
     }
     if let Some(t) = state.capture_task.lock().await.take() {
-        // rx 已 drop → 捕获线程的 blocking_send 失败后自行退出；join 兜底
-        let _ = t.join();
+        // 捕获线程是独立 std::thread：spawn_blocking + 超时等待，避免同步 join 阻塞 tokio worker
+        // （编码器缓冲期不触发 blocking_send 时，线程无法感知 rx 关闭，join 会挂起 command）
+        // 超时后不再等待：线程在下次 blocking_send 检测到 channel 关闭后自行退出
+        let _ = tokio::time::timeout(
+            Duration::from_millis(1500),
+            tokio::task::spawn_blocking(move || t.join()),
+        )
+        .await;
     }
 }
 

@@ -59,7 +59,7 @@ impl Default for DesktopShareConfig {
             },
             confirm_timeout_secs: 30,
             ffmpeg_path: String::new(),
-            clipboard_sync: true,
+            clipboard_sync: false, // 剪贴板同步已移除（UI + 功能默认关闭）
             listen_port: crate::desktop_share::network::DEFAULT_PORT,
         }
     }
@@ -123,7 +123,7 @@ mod tests {
         assert_eq!(cfg.capture.bitrate_kbps, 2000);
         assert!(cfg.default_grant.mouse);
         assert!(cfg.default_grant.keyboard);
-        assert!(cfg.clipboard_sync);
+        assert!(!cfg.clipboard_sync); // 剪贴板同步已移除，默认关闭
         assert!(cfg.listen_port > 0);
     }
 

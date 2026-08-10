@@ -1,5 +1,6 @@
-// 远程画布：WebCodecs 硬件解码 + Canvas 渲染 + 输入事件捕获
-// codec 降级链：Main → High → Baseline（与 MF 编码器实际输出匹配，自动重试）
+// 远程画布：WebCodecs 解码 + Canvas 渲染 + 输入事件捕获
+// 降级链：codec（Main→High→Baseline）× 加速策略（硬解→自动→软解），全部失败才报错
+// 说明：WebCodecs 的 prefer-hardware 在无 GPU（如虚拟机）时不会自动回退软解，必须显式重试
 
 import { useEffect, useRef, useState } from 'react';
 import { Channel } from '@tauri-apps/api/core';
@@ -15,6 +16,14 @@ interface Size {
 // H.264 codec 候选（按兼容性顺序，decode 失败自动切换下一个）
 const CODEC_CANDIDATES = ['avc1.4D401F', 'avc1.640028', 'avc1.42E01F'];
 
+// 解码加速策略回退链：VM/无 GPU 环境硬解不可用时依次回退软解
+const ACCEL_CANDIDATES = ['prefer-hardware', 'no-preference', 'prefer-software'] as const;
+
+// 远程鼠标光标：彩色箭头（SVG data URI），区别于本机系统默认光标
+const REMOTE_CURSOR = `url("data:image/svg+xml,${encodeURIComponent(
+  '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><path d="M3 2 L9 21 L11.5 13.5 L19 11 Z" fill="#3b82f6" stroke="#ffffff" stroke-width="1.5" stroke-linejoin="round"/></svg>',
+)}") 0 0, default`;
+
 export function RemoteCanvas() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const decoderRef = useRef<VideoDecoder | null>(null);
@@ -23,23 +32,29 @@ export function RemoteCanvas() {
   const [remoteSize, setRemoteSize] = useState<Size>({ width: 1920, height: 1080 });
   const [unsupported, setUnsupported] = useState(false);
   const [decoderError, setDecoderError] = useState<string | null>(null);
-  const [codecIndex, setCodecIndex] = useState(0);
-  // 当前 decoder 是否已触发 error（error 后 decoder 自动 closed，只切一次 codec）
+  // 尝试组合索引：attempt = codecIndex × accelIndex（0..codecs*accels-1）
+  const [attempt, setAttempt] = useState(0);
+  // 当前 decoder 是否已触发 error（error 后 decoder 自动 closed，只推进一次组合）
   const erroredRef = useRef(false);
+  // 会话状态：disconnected → sharing 等变化时重建解码器（二次连接/重连黑屏防御）
+  const sessionType = useDesktopStore((s) => s.session.state.type);
 
-  // 创建/重建解码器（codecIndex 变化时重建；decode 错误自动切换 codec）
+  // 创建/重建解码器（attempt 变化时重建；codec × 加速策略组合自动重试）
   useEffect(() => {
     if (!('VideoDecoder' in window)) {
       setUnsupported(true);
       return;
     }
-    if (codecIndex >= CODEC_CANDIDATES.length) {
-      setDecoderError('H.264 解码器尝试全部失败（当前 WebView 不支持 avc1 硬解）');
+    const totalAttempts = CODEC_CANDIDATES.length * ACCEL_CANDIDATES.length;
+    if (attempt >= totalAttempts) {
+      setDecoderError('H.264 解码器不可用（硬解/软解均尝试失败），请确认系统支持 H.264 解码');
       return;
     }
 
     let dec: VideoDecoder | null = null;
-    const codec = CODEC_CANDIDATES[codecIndex];
+    // 尝试顺序：codec0+硬解 → codec0+自动 → codec0+软解 → codec1+硬解 → ...
+    const codec = CODEC_CANDIDATES[Math.floor(attempt / ACCEL_CANDIDATES.length)];
+    const accel = ACCEL_CANDIDATES[attempt % ACCEL_CANDIDATES.length];
     erroredRef.current = false;
 
     try {
@@ -68,22 +83,22 @@ export function RemoteCanvas() {
           frame.close();
         },
         error: (e) => {
-          console.error(`VideoDecoder error (codec=${codec}):`, e);
-          // 解码阶段失败 → 自动切换下一个 codec 重试（同一 decoder 只切一次）
+          console.error(`VideoDecoder error (codec=${codec}, accel=${accel}):`, e);
+          // 解码阶段失败 → 先换加速策略，策略用尽再换 codec（同一 decoder 只推进一次）
           if (!erroredRef.current) {
             erroredRef.current = true;
-            setCodecIndex((i) => i + 1);
+            setAttempt((a) => a + 1);
           }
         },
       });
       dec.configure({
         codec,
         optimizeForLatency: true,
-        hardwareAcceleration: 'prefer-hardware',
+        hardwareAcceleration: accel,
       });
     } catch (e) {
-      console.error(`codec ${codec} 初始化失败:`, e);
-      setCodecIndex((i) => i + 1);
+      console.error(`解码器初始化失败 (codec=${codec}, accel=${accel}):`, e);
+      setAttempt((a) => a + 1);
       return;
     }
 
@@ -103,7 +118,7 @@ export function RemoteCanvas() {
         decoderRef.current = null;
       }
     };
-  }, [codecIndex]);
+  }, [attempt, sessionType]);
 
   // 注册视频帧通道（一次）
   useEffect(() => {
@@ -130,7 +145,23 @@ export function RemoteCanvas() {
     desktopApi.setVideoChannel(channel).catch((e) => {
       console.error('注册视频通道失败:', e);
     });
+
+    // 卸载时清空回调：避免切页后 channel 仍接收视频帧（Tauri Channel 无显式关闭 API）
+    return () => {
+      channel.onmessage = () => {};
+    };
   }, []);
+
+  // 会话结束/断开时清空画布：避免旧帧残留造成"卡住/黑屏"错觉（二次连接黑屏防御）
+  useEffect(() => {
+    if (sessionType !== 'sharing') {
+      const canvas = canvasRef.current;
+      if (canvas) {
+        const ctx = canvas.getContext('2d');
+        ctx?.clearRect(0, 0, canvas.width, canvas.height);
+      }
+    }
+  }, [sessionType]);
 
   // 输入事件发送（view_only 时不发）
   const sendInput = (event: InputEvent) => {
@@ -151,8 +182,13 @@ export function RemoteCanvas() {
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
     if (rect.width === 0 || rect.height === 0) return;
-    const scaleX = remoteSize.width / rect.width;
-    const scaleY = remoteSize.height / rect.height;
+    // 目标坐标系 = 被控端屏幕逻辑分辨率（非视频帧分辨率）：
+    // 被控端 SetCursorPos 使用其屏幕坐标，若按缩放后的视频帧尺寸映射会偏移
+    const session = useDesktopStore.getState().session;
+    const targetW = session.screen?.width ?? remoteSize.width;
+    const targetH = session.screen?.height ?? remoteSize.height;
+    const scaleX = targetW / rect.width;
+    const scaleY = targetH / rect.height;
     const x = Math.round((e.clientX - rect.left) * scaleX);
     const y = Math.round((e.clientY - rect.top) * scaleY);
     sendInput({ MouseMove: { x, y } });
@@ -162,6 +198,9 @@ export function RemoteCanvas() {
 
   const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
     e.preventDefault();
+    // 点击画布后获取焦点：使 onKeyDown/onKeyUp 能拦截键盘输入并传给被控端
+    // （否则 preventDefault 会阻止 canvas 获得焦点，键盘操作永远无法生效）
+    canvasRef.current?.focus();
     sendInput({ MouseButton: { button: buttonMap(e.button), pressed: true } });
   };
 
@@ -227,12 +266,13 @@ export function RemoteCanvas() {
     <canvas
       ref={canvasRef}
       style={{
-        width: '100%',
+        maxWidth: '100%',
+        maxHeight: '100%',
+        width: 'auto',
         height: 'auto',
-        minHeight: 400,
         background: '#000',
         borderRadius: 8,
-        cursor: 'crosshair',
+        cursor: REMOTE_CURSOR,
         outline: 'none',
       }}
       onMouseMove={handleMouseMove}

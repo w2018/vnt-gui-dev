@@ -91,8 +91,8 @@ impl MfH264Encoder {
             output_type.SetUINT32(&MF_MT_AVG_BITRATE, bitrate)?;
             output_type.SetUINT32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32)?;
             output_type.SetUINT32(&MF_MT_MPEG2_PROFILE, eAVEncH264VProfile_Main.0 as u32)?;
-            // GOP 长度（帧数）：作为输出媒体类型属性设置（Chromium 实践）
-            output_type.SetUINT32(&CODECAPI_AVEncMPVGOPSInSeq, fps * 2)?;
+            // GOP 长度（帧数）：作为输出媒体类型属性设置（Chromium 实践），1 秒低延迟
+            output_type.SetUINT32(&CODECAPI_AVEncMPVGOPSInSeq, fps)?;
             mft.SetOutputType(0, &output_type, 0)
                 .map_err(|e| DesktopError::Capture(format!("设置输出类型失败: {}", e)))?;
         }
@@ -110,17 +110,29 @@ impl MfH264Encoder {
                 .map_err(|e| DesktopError::Capture(format!("设置输入类型失败: {}", e)))?;
         }
 
-        // ---- 低延迟 / 质量 / GOP 设置（ICodecAPI） ----
+        // ---- 低延迟编码参数（ICodecAPI） ----
+        // 顺序参考：先 LowLatencyMode，再 B 帧/参考帧/GOP，最后 RateControl
         unsafe {
             if let Ok(codec) = mft.cast::<ICodecAPI>() {
                 let _ = codec.SetValue(&CODECAPI_AVLowLatencyMode, &VARIANT::from(true));
+                // 禁用 B 帧：消除 B 帧重排延迟（低延迟关键）
+                let _ = codec.SetValue(
+                    &CODECAPI_AVEncMPVDefaultBPictureCount,
+                    &VARIANT::from(0u32),
+                );
+                // 单参考帧：降低参考帧管理开销与错误传播范围
+                let _ = codec.SetValue(&CODECAPI_AVEncVideoMaxNumRefFrame, &VARIANT::from(1u32));
+                // GOP = 1 秒（低延迟：关键帧刷新更频繁，丢帧/重连恢复更快）
+                let _ = codec.SetValue(&CODECAPI_AVEncMPVGOPSize, &VARIANT::from(fps));
+                // CBR 恒定码率：延迟稳定，避免 Quality 模式的码率突发
                 let _ = codec.SetValue(
                     &CODECAPI_AVEncCommonRateControlMode,
-                    &VARIANT::from(eAVEncCommonRateControlMode_Quality.0 as u32),
+                    &VARIANT::from(eAVEncCommonRateControlMode_CBR.0 as u32),
                 );
+                // 最小缓冲：进一步降低编码延迟
+                let _ = codec.SetValue(&CODECAPI_AVEncCommonBufferSize, &VARIANT::from(1u32));
+                // 画质（CBR 下作为编码目标质量参考）
                 let _ = codec.SetValue(&CODECAPI_AVEncCommonQuality, &VARIANT::from(quality));
-                // GOP = 2 秒（保证新连接者快速出图）；ICodecAPI 属性为 GOPSize
-                let _ = codec.SetValue(&CODECAPI_AVEncMPVGOPSize, &VARIANT::from(fps * 2));
             }
         }
 
@@ -232,6 +244,16 @@ impl MfH264Encoder {
                 self.max_out_size,
             )?;
         }
+        Ok(())
+    }
+
+    /// 重置编码器状态（二次连接时调用）：冲刷内部缓冲并清空 SPS/PPS 缓存，
+    /// 避免旧会话的参数/序列号污染新会话（导致对端解码黑屏）
+    pub fn reset(&mut self) -> Result<(), DesktopError> {
+        unsafe {
+            let _ = self.mft.ProcessMessage(MFT_MESSAGE_COMMAND_FLUSH, 0);
+        }
+        self.sps_pps.clear();
         Ok(())
     }
 

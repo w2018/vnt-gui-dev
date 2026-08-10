@@ -1,22 +1,15 @@
-// 桌面共享设置面板
+// 桌面共享设置—— 桌面共享页"设置"标签页内容（标签页本身已收纳，直接展开显示全部设置项）
 
-import { Card, Col, InputNumber, Row, Slider, Space, Switch, Typography, message } from 'antd';
-import { useState } from 'react';
+import { Col, InputNumber, Row, Slider, Space, Switch, Typography, message } from 'antd';
 import { useDesktopStore } from '../../stores/useDesktopStore';
 
 const { Text } = Typography;
 
 export function DesktopSettings() {
   const { config, saveConfig, loadConfig, encoderAvailable } = useDesktopStore();
-  // hooks 必须在任何条件 return 之前（否则 config 加载完成后 hooks 数量变化 → React #310 崩溃）
-  const [collapsed, setCollapsed] = useState(true);
 
   if (!config) {
-    return (
-      <Card title="设置" size="small">
-        <a onClick={() => loadConfig().catch(() => {})}>加载设置</a>
-      </Card>
-    );
+    return <a onClick={() => loadConfig().catch(() => {})}>加载设置</a>;
   }
 
   const updateCapture = (patch: Partial<typeof config.capture>) => {
@@ -26,34 +19,24 @@ export function DesktopSettings() {
   };
 
   return (
-    <Card
-      size="small"
-      title={
-        <a onClick={() => setCollapsed(!collapsed)} style={{ fontSize: 14 }}>
-          ⚙ 设置 {collapsed ? '▸' : '▾'}
-        </a>
-      }
-    >
-      {!collapsed && (
-      <Row gutter={[12, 12]}>
-        <Col span={24}>
-          <Space direction="vertical" size="small" style={{ width: '100%' }}>
-            <Space>
-              <Text strong>允许被控制</Text>
-              <Switch
-                checked={config.allow_be_controlled}
-                onChange={(v) =>
-                  saveConfig({ allow_be_controlled: v }).catch((e) => message.error(String(e)))
-                }
-              />
-            </Space>
-            <Text type="secondary" style={{ fontSize: 12 }}>
-              关闭后其他设备无法请求连接你的桌面
-            </Text>
-          </Space>
-        </Col>
+    <Row gutter={[24, 20]}>
+      <Col span={24}>
+        <Space size="middle">
+          <Text strong>允许被控制</Text>
+          <Switch
+            checked={config.allow_be_controlled}
+            onChange={(v) =>
+              saveConfig({ allow_be_controlled: v }).catch((e) => message.error(String(e)))
+            }
+          />
+        </Space>
+        <div style={{ marginTop: 4 }}>
+          <Text type="secondary">关闭后其他设备无法请求连接你的桌面</Text>
+        </div>
+      </Col>
 
-        <Col span={12}>
+      <Col xs={24} md={12}>
+        <Space direction="vertical" size="small" style={{ width: '100%' }}>
           <Text strong>帧率 (FPS)</Text>
           <Slider
             min={10}
@@ -62,9 +45,11 @@ export function DesktopSettings() {
             onChange={(v) => updateCapture({ fps: v })}
             marks={{ 10: '10', 30: '30', 60: '60' }}
           />
-        </Col>
+        </Space>
+      </Col>
 
-        <Col span={12}>
+      <Col xs={24} md={12}>
+        <Space direction="vertical" size="small" style={{ width: '100%' }}>
           <Text strong>码率 (Kbps)</Text>
           <InputNumber
             min={500}
@@ -75,9 +60,11 @@ export function DesktopSettings() {
             style={{ width: '100%' }}
             addonAfter="Kbps"
           />
-        </Col>
+        </Space>
+      </Col>
 
-        <Col span={12}>
+      <Col xs={24} md={12}>
+        <Space direction="vertical" size="small" style={{ width: '100%' }}>
           <Text strong>输出宽度</Text>
           <InputNumber
             min={640}
@@ -87,9 +74,11 @@ export function DesktopSettings() {
             onChange={(v) => updateCapture({ width: v ?? 1920 })}
             style={{ width: '100%' }}
           />
-        </Col>
+        </Space>
+      </Col>
 
-        <Col span={12}>
+      <Col xs={24} md={12}>
+        <Space direction="vertical" size="small" style={{ width: '100%' }}>
           <Text strong>输出高度</Text>
           <InputNumber
             min={480}
@@ -99,9 +88,11 @@ export function DesktopSettings() {
             onChange={(v) => updateCapture({ height: v ?? 1080 })}
             style={{ width: '100%' }}
           />
-        </Col>
+        </Space>
+      </Col>
 
-        <Col span={24}>
+      <Col span={24}>
+        <Space direction="vertical" size="small" style={{ width: '100%' }}>
           <Text strong>画质 (CRF)</Text>
           <Slider
             min={10}
@@ -110,34 +101,21 @@ export function DesktopSettings() {
             onChange={(v) => updateCapture({ quality: v })}
             marks={{ 10: '高', 23: '中', 35: '低' }}
           />
-        </Col>
+        </Space>
+      </Col>
 
-        <Col span={24}>
-          <Space>
-            <Text strong>剪贴板同步</Text>
-            <Switch
-              checked={config.clipboard_sync}
-              onChange={(v) =>
-                saveConfig({ clipboard_sync: v }).catch((e) => message.error(String(e)))
-              }
-            />
-          </Space>
-        </Col>
-
-        <Col span={24}>
-          <Text
-            type={encoderAvailable === false ? 'danger' : 'secondary'}
-            style={{ fontSize: 12 }}
-          >
-            {encoderAvailable === null
-              ? '正在检查系统编码器...'
-              : encoderAvailable
-                ? '✅ 系统 H.264 编码器可用（Windows Media Foundation）'
-                : '⚠️ 系统缺少 H.264 编码器（Windows N 版需安装媒体功能包）'}
-          </Text>
-        </Col>
-      </Row>
-      )}
-    </Card>
+      <Col span={24}>
+        <Text
+          type={encoderAvailable === false ? 'danger' : 'secondary'}
+          style={{ fontSize: 12 }}
+        >
+          {encoderAvailable === null
+            ? '正在检查系统编码器...'
+            : encoderAvailable
+              ? '✅ 系统 H.264 编码器可用（Windows Media Foundation）'
+              : '⚠️ 系统缺少 H.264 编码器（Windows N 版需安装媒体功能包）'}
+        </Text>
+      </Col>
+    </Row>
   );
 }

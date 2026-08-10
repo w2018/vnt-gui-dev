@@ -81,9 +81,14 @@ fn capture_loop(
 
     let mut nv12_buf: Vec<u8> = Vec::new();
     let mut bgra_buf: Vec<u8> = Vec::new();
+    let mut scaled_bgra: Vec<u8> = Vec::new();
     let mut pts_counter: u64 = 0;
     let start = std::time::Instant::now();
     let mut frames_encoded: u64 = 0;
+
+    // 帧率节流：DXGI 桌面变化时可达显示器刷新率（远超配置 fps），这里真正限帧
+    let frame_interval = std::time::Duration::from_micros(1_000_000 / cfg.fps.max(1) as u64);
+    let mut last_send = start.checked_sub(frame_interval).unwrap_or(start);
 
     loop {
         // 每帧重建 duplication（AccessLost 后自动恢复；开销可忽略）
@@ -123,6 +128,13 @@ fn capture_loop(
                 continue;
             }
 
+            // 帧率节流：未到发送间隔则跳过本帧（继续等待下一帧变化）
+            let now = std::time::Instant::now();
+            if now.duration_since(last_send) < frame_interval {
+                continue;
+            }
+            last_send = now;
+
             let width = frame.width();
             let height = frame.height();
             if width % 2 != 0 || height % 2 != 0 {
@@ -130,16 +142,19 @@ fn capture_loop(
                 continue;
             }
 
-            // 分辨率变化 → 重建编码器
-            if encoder.width() != width || encoder.height() != height {
+            // 目标输出分辨率：配置有效且小于物理时按比例缩小（不放大、保持宽高比）
+            let (dst_w, dst_h) = target_size(width, height, cfg);
+
+            // 分辨率变化 → 以目标分辨率重建编码器
+            if encoder.width() != dst_w || encoder.height() != dst_h {
                 log::info!(
-                    "分辨率变化: {}x{} → {}x{}",
+                    "分辨率变化: {}x{} → 输出 {}x{}",
                     encoder.width(),
                     encoder.height(),
-                    width,
-                    height
+                    dst_w,
+                    dst_h
                 );
-                encoder = create_encoder_resolved(width, height, cfg)?;
+                encoder = create_encoder_resolved(dst_w, dst_h, cfg)?;
             }
 
             // CPU 读回 BGRA
@@ -156,8 +171,13 @@ fn capture_loop(
                 continue;
             }
 
-            // BGRA → NV12
-            bgra_to_nv12(bgra, width, height, &mut nv12_buf);
+            // BGRA → NV12（物理分辨率 ≠ 目标时先双线性缩放到目标尺寸，再颜色转换）
+            if dst_w == width && dst_h == height {
+                bgra_to_nv12(bgra, width, height, &mut nv12_buf);
+            } else {
+                scale_bgra(bgra, width, height, dst_w, dst_h, &mut scaled_bgra);
+                bgra_to_nv12(&scaled_bgra, dst_w, dst_h, &mut nv12_buf);
+            }
 
             // H.264 编码
             let pts_ms = start.elapsed().as_millis() as u64;
@@ -281,6 +301,64 @@ pub fn bgra_to_nv12(bgra: &[u8], width: u32, height: u32, out: &mut Vec<u8>) {
             let uv_idx = (y / 2) * w + x;
             uv_plane[uv_idx] = u.clamp(16, 240) as u8;
             uv_plane[uv_idx + 1] = v.clamp(16, 240) as u8;
+        }
+    }
+}
+
+/// 计算输出目标分辨率：配置有效且小于物理时按比例缩小（保持宽高比、偶数化；不放大）
+fn target_size(phys_w: u32, phys_h: u32, cfg: &CaptureConfig) -> (u32, u32) {
+    let cfg_w = cfg.width;
+    let cfg_h = cfg.height;
+    if cfg_w == 0 || cfg_h == 0 {
+        return (phys_w, phys_h);
+    }
+    if cfg_w >= phys_w && cfg_h >= phys_h {
+        return (phys_w, phys_h); // 配置不小于物理 → 不放大
+    }
+    // 保持宽高比缩小（fit 到配置边界内）
+    let scale = (cfg_w as f64 / phys_w as f64).min(cfg_h as f64 / phys_h as f64);
+    let w = (((phys_w as f64 * scale).round() as u32).max(2)) & !1;
+    let h = (((phys_h as f64 * scale).round() as u32).max(2)) & !1;
+    (w, h)
+}
+
+/// BGRA 双线性缩放（纯 CPU，零新依赖；双线性插值保持清晰度）
+fn scale_bgra(src: &[u8], src_w: u32, src_h: u32, dst_w: u32, dst_h: u32, out: &mut Vec<u8>) {
+    let sw = src_w as usize;
+    let sh = src_h as usize;
+    let dw = dst_w as usize;
+    let dh = dst_h as usize;
+    out.resize(dw * dh * 4, 0);
+    if dw == sw && dh == sh {
+        out.copy_from_slice(src);
+        return;
+    }
+    let sx = sw as f64 / dw as f64;
+    let sy = sh as f64 / dh as f64;
+    for dy in 0..dh {
+        let fy = dy as f64 * sy;
+        let y0 = (fy as usize).min(sh - 1);
+        let y1 = (y0 + 1).min(sh - 1);
+        let wy = fy - y0 as f64;
+        for dx in 0..dw {
+            let fx = dx as f64 * sx;
+            let x0 = (fx as usize).min(sw - 1);
+            let x1 = (x0 + 1).min(sw - 1);
+            let wx = fx - x0 as f64;
+            let r0 = (y0 * sw + x0) * 4;
+            let r1 = (y0 * sw + x1) * 4;
+            let r2 = (y1 * sw + x0) * 4;
+            let r3 = (y1 * sw + x1) * 4;
+            let o = (dy * dw + dx) * 4;
+            for c in 0..4 {
+                let v00 = src[r0 + c] as f64;
+                let v10 = src[r1 + c] as f64;
+                let v01 = src[r2 + c] as f64;
+                let v11 = src[r3 + c] as f64;
+                let top = v00 + (v10 - v00) * wx;
+                let bot = v01 + (v11 - v01) * wx;
+                out[o + c] = ((top + (bot - top) * wy).round()) as u8;
+            }
         }
     }
 }

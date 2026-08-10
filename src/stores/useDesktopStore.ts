@@ -56,6 +56,9 @@ interface DesktopStoreState {
   setupListeners: () => Promise<() => void>;
 }
 
+// 桌面共享事件监听器全局注册标志（幂等防重复；App 挂载时注册，应用生命周期内常驻）
+let listenersActive = false;
+
 const defaultSession: SessionInfo = {
   role: 'idle',
   state: { type: 'idle' },
@@ -127,14 +130,22 @@ export const useDesktopStore = create<DesktopStoreState>((set, get) => ({
   },
 
   acceptRequest: async (opts) => {
-    await desktopApi.acceptRequest(opts.mouse, opts.keyboard, opts.clipboard, opts.viewOnly);
-    set({ pendingRequest: null });
+    try {
+      await desktopApi.acceptRequest(opts.mouse, opts.keyboard, opts.clipboard, opts.viewOnly);
+    } finally {
+      // 无论成功失败都关闭授权弹窗（避免请求已失效/处理失败时 Modal 卡住点击无效）
+      set({ pendingRequest: null });
+    }
     await get().refreshSession();
   },
 
   rejectRequest: async (reason) => {
-    await desktopApi.rejectRequest(reason);
-    set({ pendingRequest: null });
+    try {
+      await desktopApi.rejectRequest(reason);
+    } finally {
+      // 同上：确保弹窗关闭
+      set({ pendingRequest: null });
+    }
     await get().refreshSession();
   },
 
@@ -175,26 +186,42 @@ export const useDesktopStore = create<DesktopStoreState>((set, get) => ({
   },
 
   setupListeners: async () => {
+    // 幂等：已全局注册则直接返回空清理函数（App 全局 + 页面均调用时防重复）
+    if (listenersActive) {
+      return () => {};
+    }
     const unlisteners: Array<() => void> = [];
+    try {
+      unlisteners.push(
+        await desktopApi.onSessionUpdate((info) => {
+          set({ session: info });
+          // 会话离开"等待确认" → 清除请求弹窗（请求已被处理/超时自动拒绝）
+          if (info.state.type !== 'waiting_confirm') {
+            set({ pendingRequest: null });
+          }
+        }),
+      );
 
-    unlisteners.push(
-      await desktopApi.onSessionUpdate((info) => {
-        set({ session: info });
-      }),
-    );
+      unlisteners.push(
+        await desktopApi.onConnectRequest((req) => {
+          set({ pendingRequest: req });
+        }),
+      );
 
-    unlisteners.push(
-      await desktopApi.onConnectRequest((req) => {
-        set({ pendingRequest: req });
-      }),
-    );
-
-    unlisteners.push(
-      await desktopApi.onClipboard((text) => {
-        set({ lastClipboard: text });
-      }),
-    );
-
-    return () => unlisteners.forEach((fn) => fn());
+      unlisteners.push(
+        await desktopApi.onClipboard((text) => {
+          set({ lastClipboard: text });
+        }),
+      );
+    } catch (e) {
+      // 注册失败：清理已注册项后重抛
+      unlisteners.forEach((fn) => fn());
+      throw e;
+    }
+    listenersActive = true;
+    return () => {
+      listenersActive = false;
+      unlisteners.forEach((fn) => fn());
+    };
   },
 }));
