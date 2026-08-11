@@ -79,8 +79,6 @@ impl ClipboardManager {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     /// 去重规则：空文本不视为变更（避免启动即把空剪贴板发出去）
     fn should_sync(last: &str, current: &str) -> bool {
         !current.is_empty() && last != current

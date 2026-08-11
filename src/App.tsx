@@ -8,6 +8,7 @@ import {
   Activity,
   Database,
   FileText,
+  FileUp,
   Home,
   Monitor,
   PlugZap,
@@ -28,8 +29,11 @@ import { FirstRunWizard } from './components/FirstRunWizard';
 import { SettingsPanel } from './components/SettingsPanel';
 import { FtpService } from './pages/FtpService';
 import { DesktopShare } from './pages/DesktopShare';
+import { FileTransfer } from './pages/FileTransfer';
 import { ConnectionRequest } from './components/desktop/ConnectionRequest';
+import { ReceiveDialog } from './components/file/ReceiveDialog';
 import { useDesktopStore } from './stores/useDesktopStore';
+import { useFileTransferStore } from './stores/useFileTransferStore';
 import { useConfigStore } from './stores/configStore';
 import { useConnectionStore } from './stores/connectionStore';
 import { useTrafficStore } from './stores/trafficStore';
@@ -42,6 +46,7 @@ type PageKey =
   | 'config'
   | 'ftp'
   | 'desktop'
+  | 'filetransfer'
   | 'traffic'
   | 'log'
   | 'settings'
@@ -53,6 +58,7 @@ const menuItems = [
   { key: 'config', icon: <Database size={16} />, label: '配置' },
   { key: 'ftp', icon: <Server size={16} />, label: 'FTP 服务' },
   { key: 'desktop', icon: <Monitor size={16} />, label: '桌面共享' },
+  { key: 'filetransfer', icon: <FileUp size={16} />, label: '文件传输' },
   { key: 'traffic', icon: <Activity size={16} />, label: '流量' },
   { key: 'log', icon: <FileText size={16} />, label: '日志' },
   { key: 'settings', icon: <Settings size={16} />, label: '设置' },
@@ -179,6 +185,19 @@ export default function App() {
     return () => unlisten?.();
   }, []);
 
+  // 文件传输事件全局监听：任意页面/后台都能收到文件接收请求 → 全局确认弹窗
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    (async () => {
+      try {
+        unlisten = await useFileTransferStore.getState().setupListeners();
+      } catch {
+        // 监听注册失败不阻塞应用其他功能
+      }
+    })();
+    return () => unlisten?.();
+  }, []);
+
   return (
     <ErrorBoundary>
       <Layout style={{ minHeight: '100vh' }}>
@@ -213,6 +232,7 @@ export default function App() {
         {page === 'traffic' && <TrafficChart />}
         {page === 'ftp' && <FtpService />}
         {page === 'desktop' && <DesktopShare />}
+        {page === 'filetransfer' && <FileTransfer />}
         {page === 'log' && <LogViewer />}
         {page === 'settings' && <SettingsPanel />}
         {page === 'update' && <UpdateDialog />}
@@ -221,6 +241,8 @@ export default function App() {
       </Layout>
       {/* 桌面共享授权弹窗：全局渲染，任意页面/后台均可见 */}
       <ConnectionRequest />
+      {/* 文件传输接收确认弹窗：全局渲染，任意页面/后台均可见 */}
+      <ReceiveDialog />
     </ErrorBoundary>
   );
 }

@@ -93,10 +93,12 @@ export interface PeriodTraffic {
   total: DayTraffic;
 }
 
-/** 应用行为设置（托盘可见性等） */
+/** 应用行为设置（托盘可见性、启动自动连接等） */
 export interface AppSettings {
   hide_tray_on_autostart: boolean;
   hide_tray_on_background: boolean;
+  /** 启动应用时自动连接默认配置（vnt-daemon 模式下） */
+  auto_connect_on_startup: boolean;
 }
 
 export interface UpdateInfo {

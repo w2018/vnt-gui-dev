@@ -31,6 +31,7 @@ impl ConnectionStatus {
     }
 
     /// 展示用文本
+    #[allow(dead_code)]
     pub fn label(&self) -> String {
         match self {
             ConnectionStatus::Stopped => "未连接".to_string(),
@@ -127,12 +128,14 @@ pub struct AppState {
     /// 本机 NAT 类型（--info 解析，如 "Cone"）
     pub nat_type: Mutex<Option<String>>,
     /// sidecar 启停互斥锁（防止 autostart 自动连接与手动连接并发导致双进程）
+    #[allow(dead_code)]
     pub process_lock: Mutex<()>,
     /// 流量统计快照
     pub traffic_snapshot: RwLock<TrafficSnapshot>,
     /// 按天累计流量统计（今日/昨日/本月/累计，持久化）
     pub traffic_daily: Mutex<crate::traffic::TrafficStats>,
     /// Sidecar 子进程句柄（必须持有，否则进程会被杀死）
+    #[allow(dead_code)]
     pub sidecar_child: RwLock<Option<CommandChild>>,
     /// 托盘动态菜单项句柄（用于更新状态行/连接/断开）
     pub tray_menu_items: Mutex<Option<TrayMenuItems>>,

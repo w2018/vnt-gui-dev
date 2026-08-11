@@ -1,6 +1,6 @@
 [package]
 name = "vnt-gui"
-version = "2.3.2"
+version = "3.0.0"
 description = "VNT 虚拟局域网图形化管理工具"
 authors = ["vnt-gui"]
 edition = "2021"
@@ -50,7 +50,7 @@ unftp-core = "0.1"
 async-trait = "0.1.92"
 libunftp = { version = "0.23", default-features = false, features = ["ring"] }
 network-interface = "2"
-tokio-util = "0.7"
+tokio-util = { version = "0.7", features = ["codec"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-log = "0.2"
@@ -59,6 +59,10 @@ bincode = "1"
 arboard = "3"
 enigo = "0.6.1"
 windows-capture = "2.0.1"
+
+# 文件传输模块新增（sha2 文件哈希校验 + hex 哈希编码）
+sha2 = "0.10"
+hex = "0.4"
 
 # Daemon 独立可执行文件（服务解耦）
 [[bin]]

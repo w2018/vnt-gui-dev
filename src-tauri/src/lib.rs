@@ -4,6 +4,7 @@ mod autostart;
 pub mod config;
 pub mod daemon;
 pub mod desktop_share;
+pub mod file_transfer;
 pub mod ftp;
 mod logger;
 mod settings;
@@ -54,6 +55,58 @@ async fn stop_connection(app: tauri::AppHandle) -> Result<(), String> {
     crate::daemon::rpc_client::vnt_stop().await?;
     sync_status_from_daemon(&app).await;
     Ok(())
+}
+
+/// 选择默认连接配置：优先活动配置，无则第一条（可单测的纯函数）
+fn select_default_config(store: &config::ConfigStore) -> Option<VntConfig> {
+    store
+        .get_active()
+        .cloned()
+        .or_else(|| store.configs.first().cloned())
+}
+
+/// 启动应用时自动连接默认配置（vnt-daemon 模式下）
+///
+/// 时机：daemon RPC 就绪后调用一次。
+/// 条件：设置 auto_connect_on_startup 开启 + 当前 VNT 未运行 + 存在可用配置。
+/// 不满足则静默跳过（不打扰用户手动控制的连接状态）。
+async fn auto_connect_default(app: &tauri::AppHandle) {
+    // 1. 设置开关未开启 → 跳过
+    if !settings::load_settings().auto_connect_on_startup {
+        log::info!("启动自动连接：设置未开启，跳过");
+        return;
+    }
+    // 2. VNT 已在运行（含启动中）→ 跳过，避免干扰已建立的连接
+    if let Ok(crate::daemon::rpc_protocol::DaemonResponse::State {
+        vnt_running, ..
+    }) = crate::daemon::rpc_client::get_state().await
+    {
+        if vnt_running {
+            log::info!("启动自动连接：VNT 已在运行，跳过");
+            return;
+        }
+    } else {
+        // daemon 状态获取失败（如 RPC 未就绪）→ 保守跳过
+        log::warn!("启动自动连接：获取 daemon 状态失败，跳过");
+        return;
+    }
+    // 3. 选择默认配置（活动配置优先，否则第一条）
+    let Some(cfg) = select_default_config(&config::load_config_store()) else {
+        log::info!("启动自动连接：无可用配置，跳过");
+        return;
+    };
+    log::info!(
+        "启动自动连接：{} (server={})",
+        cfg.name,
+        cfg.server_address.as_deref().unwrap_or("默认官方服务器")
+    );
+    // 4. 经 daemon 发起连接；失败仅告警，不阻断应用启动
+    if let Err(e) = crate::daemon::rpc_client::vnt_start(cfg).await {
+        log::warn!("启动自动连接失败: {}", e);
+        return;
+    }
+    // 5. 即时同步 GUI 状态（托盘 + 前端）
+    sync_status_from_daemon(app).await;
 }
 
 /// 获取当前连接状态（daemon 状态映射）
@@ -549,6 +602,72 @@ async fn get_vnt_version(app: tauri::AppHandle) -> Result<String, String> {
     updater::local_vnt_version(&app).await
 }
 
+// ==================== 文件/目录打开 ====================
+
+/// 用系统默认程序打开文件或目录
+/// Windows 走 explorer.exe（Rust std::process 宽字符路径），
+/// 规避 tauri-plugin-shell `open` 在中文/含特殊字符路径下的兼容问题。
+#[tauri::command]
+fn open_path(path: String) -> Result<(), String> {
+    let path = path.trim();
+    if path.is_empty() {
+        return Err("路径为空".to_string());
+    }
+    let p = std::path::Path::new(path);
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("explorer")
+            .arg(p)
+            .spawn()
+            .map_err(|e| format!("打开失败: {}", e))?;
+        Ok(())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let prog = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
+        std::process::Command::new(prog)
+            .arg(p)
+            .spawn()
+            .map_err(|e| format!("打开失败: {}", e))?;
+        Ok(())
+    }
+}
+
+/// 打开文件所在目录并在资源管理器中选中该文件（目录则直接打开）
+#[tauri::command]
+fn reveal_in_explorer(path: String) -> Result<(), String> {
+    let path = path.trim();
+    if path.is_empty() {
+        return Err("路径为空".to_string());
+    }
+    let p = std::path::Path::new(path);
+    #[cfg(target_os = "windows")]
+    {
+        let mut cmd = std::process::Command::new("explorer");
+        if p.is_dir() {
+            cmd.arg(p);
+        } else {
+            cmd.arg(format!("/select,{}", path));
+        }
+        cmd.spawn().map_err(|e| format!("打开所在目录失败: {}", e))?;
+        Ok(())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let dir = p
+            .parent()
+            .map(|d| d.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let target = if dir.is_empty() { p.to_string_lossy().to_string() } else { dir };
+        let prog = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
+        std::process::Command::new(prog)
+            .arg(&target)
+            .spawn()
+            .map_err(|e| format!("打开所在目录失败: {}", e))?;
+        Ok(())
+    }
+}
+
 /// 获取在线设备列表（数据来自 daemon 定期 --list 解析；本机识别用 daemon 虚拟 IP）
 /// 返回：过滤本机后的设备列表 + 本机设备信息
 #[tauri::command]
@@ -598,6 +717,8 @@ async fn get_device_list(app: tauri::AppHandle) -> Result<state::DeviceListResul
 }
 
 /// 解析 vnt --info 输出（Name: Z / Virtual ip: 10.26.0.3）
+/// 仅在测试中使用（生产路径未引用）
+#[allow(dead_code)]
 fn parse_info(text: &str) -> (Option<String>, Option<String>) {
     let mut name = None;
     let mut ip = None;
@@ -900,6 +1021,8 @@ pub fn run(autostart: bool) {
                         *state.connection.write() = status.clone();
                         let _ = tray::update_tray_status(&handle, &status);
                         sync_daemon_info(&handle).await;
+                        // 3.5 启动自动连接默认配置（设置开启且未运行时有可用配置才连）
+                        auto_connect_default(&handle).await;
                         // 4. 状态轮询（3 秒）：daemon 状态 → GUI 内存 + 托盘
                         loop {
                             tokio::time::sleep(Duration::from_secs(3)).await;
@@ -954,6 +1077,17 @@ pub fn run(autostart: bool) {
                 }
             }
 
+            // 文件传输模块初始化（后台，不阻塞启动）
+            {
+                let app_handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(Duration::from_secs(2)).await;
+                    if let Err(e) = file_transfer::file_init(app_handle).await {
+                        log::error!("文件传输初始化失败: {}", e);
+                    }
+                });
+            }
+
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -999,6 +1133,8 @@ pub fn run(autostart: bool) {
             is_autostart_enabled,
             get_app_version,
             get_vnt_version,
+            open_path,
+            reveal_in_explorer,
             get_device_list,
             get_traffic_stats,
             get_traffic_period,
@@ -1024,6 +1160,28 @@ pub fn run(autostart: bool) {
             desktop_share::desktop_get_config,
             desktop_share::desktop_save_config,
             desktop_share::desktop_check_encoder,
+            file_transfer::file_init,
+            file_transfer::file_send,
+            file_transfer::file_send_batch,
+            file_transfer::file_send_text,
+            file_transfer::file_accept,
+            file_transfer::file_reject,
+            file_transfer::file_cancel,
+            file_transfer::file_pause,
+            file_transfer::file_remove_task,
+            file_transfer::file_get_transfers,
+            file_transfer::file_get_history,
+            file_transfer::file_delete_history,
+            file_transfer::file_delete_history_batch,
+            file_transfer::file_clear_history,
+            file_transfer::file_get_filter,
+            file_transfer::file_save_filter,
+            file_transfer::file_get_threshold,
+            file_transfer::file_set_threshold,
+            file_transfer::file_set_auto_accept,
+            file_transfer::file_get_settings,
+            file_transfer::file_set_save_dir,
+            file_transfer::file_get_file_info,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
@@ -1037,4 +1195,63 @@ pub fn run(autostart: bool) {
                 log::info!("退出：已保存流量统计");
             }
         });
+}
+
+#[cfg(test)]
+mod auto_connect_tests {
+    use super::select_default_config;
+    use crate::config::{ConfigStore, VntConfig};
+
+    /// 构造测试配置（仅需 id/name/token）
+    fn cfg(id: &str) -> VntConfig {
+        VntConfig {
+            id: id.to_string(),
+            name: id.to_string(),
+            token: "tok".to_string(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn selects_active_config_first() {
+        // 活动配置存在 → 返回活动配置
+        let store = ConfigStore {
+            active_config_id: Some("b".into()),
+            configs: vec![cfg("a"), cfg("b"), cfg("c")],
+        };
+        let picked = select_default_config(&store).unwrap();
+        assert_eq!(picked.id, "b");
+    }
+
+    #[test]
+    fn falls_back_to_first_when_no_active() {
+        // 无活动配置 → 返回第一条
+        let store = ConfigStore {
+            active_config_id: None,
+            configs: vec![cfg("a"), cfg("b")],
+        };
+        let picked = select_default_config(&store).unwrap();
+        assert_eq!(picked.id, "a");
+    }
+
+    #[test]
+    fn none_when_no_configs() {
+        // 无任何配置 → None
+        let store = ConfigStore {
+            active_config_id: None,
+            configs: vec![],
+        };
+        assert!(select_default_config(&store).is_none());
+    }
+
+    #[test]
+    fn none_when_active_refers_missing() {
+        // 活动配置 id 指向不存在的配置 → 退回第一条
+        let store = ConfigStore {
+            active_config_id: Some("ghost".into()),
+            configs: vec![cfg("a")],
+        };
+        let picked = select_default_config(&store).unwrap();
+        assert_eq!(picked.id, "a");
+    }
 }

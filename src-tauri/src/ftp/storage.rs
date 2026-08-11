@@ -313,7 +313,7 @@ mod tests {
     use super::*;
     use crate::ftp::config::FtpPermissions;
     use crate::ftp::auth::FtpUserDetail;
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::io::AsyncReadExt;
 
     fn user(perms: FtpPermissions, root: PathBuf) -> FtpUserDetail {
         FtpUserDetail {

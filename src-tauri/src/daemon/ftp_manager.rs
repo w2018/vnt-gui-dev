@@ -52,7 +52,7 @@ pub async fn restart(state: Arc<Mutex<RuntimeState>>, rpc_cfg: FtpConfigWithSecr
 }
 
 /// 内部实现：启动 FTP + 写 daemon 侧 keyring + 持久化状态
-async fn start_inner(state: Arc<Mutex<RuntimeState>>, mut cfg: FtpConfig) -> Result<(), String> {
+async fn start_inner(state: Arc<Mutex<RuntimeState>>, cfg: FtpConfig) -> Result<(), String> {
     // 密码写入 daemon 侧 keyring：保证 daemon 重启后能从自己凭据库恢复（同进程读写同一 TargetName）
     for user in &cfg.users {
         if user.password.is_empty() {

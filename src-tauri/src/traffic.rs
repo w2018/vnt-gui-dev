@@ -20,6 +20,7 @@ pub struct DayTraffic {
 }
 
 impl DayTraffic {
+    #[allow(dead_code)]
     pub fn total(&self) -> u64 {
         self.sent.saturating_add(self.recv)
     }

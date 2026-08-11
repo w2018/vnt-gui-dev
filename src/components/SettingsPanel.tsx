@@ -40,6 +40,8 @@ export function SettingsPanel() {
   // 托盘可见性设置（1a/1b）
   const [hideTrayAutostart, setHideTrayAutostart] = useState(false);
   const [hideTrayBackground, setHideTrayBackground] = useState(false);
+  // 启动时自动连接默认配置（vnt-daemon 模式下）
+  const [autoConnectStartup, setAutoConnectStartup] = useState(true);
   // 初始状态加载完成前禁用交互，避免异步结果覆盖用户操作
   const [initializing, setInitializing] = useState(true);
   const { save } = useConfigStore();
@@ -87,6 +89,8 @@ export function SettingsPanel() {
         const s = await api.getSettings();
         setHideTrayAutostart(s.hide_tray_on_autostart);
         setHideTrayBackground(s.hide_tray_on_background);
+        // 老配置后端已补默认值，此处兜底
+        setAutoConnectStartup(s.auto_connect_on_startup ?? true);
       } catch {
         /* 忽略 */
       }
@@ -95,16 +99,17 @@ export function SettingsPanel() {
     return unsub;
   }, []);
 
-  // 托盘可见性设置变更时自动持久化（消除闭包旧值问题）
+  // 设置变更时自动持久化（消除闭包旧值问题）
   useEffect(() => {
     if (initializing) return;
     void api
       .saveSettings({
         hide_tray_on_autostart: hideTrayAutostart,
         hide_tray_on_background: hideTrayBackground,
+        auto_connect_on_startup: autoConnectStartup,
       })
       .catch((e) => message.error(`保存设置失败: ${String(e)}`));
-  }, [hideTrayAutostart, hideTrayBackground, initializing]);
+  }, [hideTrayAutostart, hideTrayBackground, autoConnectStartup, initializing]);
 
   // 组件卸载时注销全局快捷键，避免残留导致下次注册冲突（HotKey already registered）；兜底捕获防崩溃
   useEffect(() => {
@@ -289,6 +294,24 @@ export function SettingsPanel() {
                     /* 忽略：托盘操作失败不影响设置保存 */
                   });
                 }}
+              />
+            </Col>
+          </Row>
+          <Divider style={{ margin: '4px 0' }} />
+          <Row align="middle" justify="space-between">
+            <Col>
+              <Typography.Text strong>启动时自动连接</Typography.Text>
+              <div>
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  打开应用时自动连接默认配置（活动配置优先，vnt-daemon 模式下）
+                </Typography.Text>
+              </div>
+            </Col>
+            <Col>
+              <Switch
+                checked={autoConnectStartup}
+                disabled={initializing}
+                onChange={setAutoConnectStartup}
               />
             </Col>
           </Row>
